@@ -136,16 +136,50 @@ Future<void> checkApiConnection() async {
           // wireframe for each widget.
           mainAxisAlignment: .center,
           children: [
-            Text(
-  apiStatus,
-  textAlign: TextAlign.center,
+            const Text(
+  'Estado de conexión',
+  style: TextStyle(
+    fontSize: 22,
+    fontWeight: FontWeight.bold,
+  ),
 ),
-const SizedBox(height: 20),
+
+const SizedBox(height: 25),
+
+Text(
+  apiStatus == 'Sin comprobar'
+      ? 'API: Sin comprobar'
+      : '✓ API: OK',
+  style: const TextStyle(fontSize: 18),
+),
+
+const SizedBox(height: 10),
+
+Text(
+  apiStatus.contains('CONNECTED')
+      ? '✓ Base de datos: OK'
+      : 'Base de datos: Sin comprobar',
+  style: const TextStyle(fontSize: 18),
+),
+
+const SizedBox(height: 10),
+
+Text(
+  apiStatus.contains('CONNECTED')
+      ? '✓ Oracle: OK'
+      : 'Oracle: Sin comprobar',
+  style: const TextStyle(fontSize: 18),
+),
+
+const SizedBox(height: 25),
+
 ElevatedButton(
   onPressed: checkApiConnection,
   child: const Text('Probar conexión con API'),
 ),
+
 const SizedBox(height: 20),
+
             const Text('You have pushed the button this many times:'),
             Text(
               '$_counter',

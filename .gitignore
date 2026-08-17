@@ -122,3 +122,4 @@ app.*.symbols
 backend/.env
 backend/node_modules/
 *.code-workspace
+PLAN_DESARROLLO.md
