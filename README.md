@@ -258,6 +258,56 @@ Actualmente se encuentra funcionando:
 * Endpoint `/api/health`.
 * Consumo del endpoint desde Flutter.
 
+## Semana 10 – Sistema de diseño y componentes reutilizables
+
+Se implementó en la app Flutter un sistema de diseño centralizado y un catálogo de componentes reutilizables sin romper la arquitectura existente de la Semana 12.
+
+### Sistema de tokens
+
+Se definió un tema central con tokens primitivos y semánticos usando `ThemeData` y `ThemeExtension` en `mobile/lib/core/theme/cashcontrol_theme.dart`.
+
+- Colores base: primario, fondo, superficie, texto principal/secundario, éxito, error, warning, info y bordes.
+- Tipografías: tamaños base para cuerpo y títulos.
+- Espaciados: `4`, `8`, `12`, `16`, `24`, `32`.
+- Radios: `8`, `12`, `16`, `24`.
+
+### Componentes reutilizables
+
+Se añadieron los siguientes widgets reutilizables:
+
+- `AppButton`
+- `AppTextField`
+- `ExpenseCard`
+- `AsyncStateView`
+
+Estos componentes:
+
+- no consultan directamente el backend
+- no dependen de rutas ni navegación
+- reciben datos por parámetros
+- usan callbacks para acciones
+- consumen `Theme` y `ThemeExtension`
+- permiten contenido delegado
+
+### Accesibilidad
+
+Se aplicaron buenas prácticas para diseño accesible:
+
+- contraste con ratio adecuado para WCAG AA
+- mínimo táctil de `48x48` logical pixels
+- `Semantics` para acciones y mensajes importantes
+- señales no solo por color (iconos, texto y etiquetas)
+
+### Evidencia técnica
+
+La documentación detallada del informe queda en:
+
+- `mobile/docs/semana10_informe_diseno.md`
+- `mobile/lib/core/theme/cashcontrol_theme.dart`
+- `mobile/lib/widgets/`
+
+El proyecto quedó preparado para generar el informe técnico de la Semana 10 conservando la persistencia local, sincronización offline y flujo actual de gastos implementado en la Semana 12.
+
 ## Persistencia local y funcionamiento offline
 
 La aplicación usa SQLite mediante `sqflite`, con migraciones versionadas. La base local contiene `expenses`, `pending_operations` y `app_metadata`. Los gastos se filtran por `user_id`; cada gasto conserva `local_id`, `server_id`, `client_operation_id`, categoría, monto, fechas y estado de sincronización. La versión 2 añade `last_synced_at` sin borrar la base existente.

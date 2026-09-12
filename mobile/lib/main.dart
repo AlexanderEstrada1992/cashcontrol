@@ -4,12 +4,16 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
+import 'core/theme/cashcontrol_theme.dart';
 import 'models/expense.dart';
 import 'repositories/expense_repository.dart';
 import 'services/api_service.dart';
 import 'services/local_database.dart';
 import 'services/secure_storage_service.dart';
 import 'services/sync_service.dart';
+import 'widgets/app_button.dart';
+import 'widgets/async_state_view.dart';
+import 'widgets/expense_card.dart';
 
 const String apiBaseUrl = String.fromEnvironment('API_BASE_URL', defaultValue: 'http://10.0.2.2:3000');
 
@@ -24,30 +28,9 @@ class CashControlApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) => MaterialApp(
         title: 'CashControl',
-        theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo)),
+        debugShowCheckedModeBanner: false,
+        theme: CashControlThemeData.lightTheme,
         home: const HomeScreen(),
-      );
-}
-
-class MyApp extends StatefulWidget {
-  const MyApp({super.key});
-
-  @override
-  State<MyApp> createState() => _MyAppState();
-}
-
-class _MyAppState extends State<MyApp> {
-  var _counter = 0;
-
-  @override
-  Widget build(BuildContext context) => MaterialApp(
-        home: Scaffold(
-          body: Center(child: Text('$_counter')),
-          floatingActionButton: FloatingActionButton(
-            onPressed: () => setState(() => _counter++),
-            child: const Icon(Icons.add),
-          ),
-        ),
       );
 }
 
@@ -210,37 +193,181 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final colors = Theme.of(context).extension<CashControlColors>()!;
+
     if (_loading) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return Scaffold(
+        backgroundColor: colors.surface,
+        body: AsyncStateView(
+          loading: true,
+          error: null,
+          empty: false,
+          content: const SizedBox.shrink(),
+        ),
+      );
     }
     if (_userId == null) {
-      return Scaffold(appBar: AppBar(title: const Text('CashControl')), body: Center(child: FilledButton.icon(
-        onPressed: _startDemoSession, icon: const Icon(Icons.login), label: const Text('Iniciar sesión local de demostración'),
-      )));
+      return Scaffold(
+        backgroundColor: colors.surface,
+        appBar: AppBar(title: const Text('CashControl')),
+        body: Center(
+          child: Padding(
+            padding: EdgeInsets.all(colors.spacingXl),
+            child: Card(
+              child: Padding(
+                padding: EdgeInsets.all(colors.spacingXl),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Acceso local',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    SizedBox(height: colors.spacingMd),
+                    Text(
+                      'Inicia una sesión local de demostración para explorar el flujo de gastos y sincronización.',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: colors.textSecondary),
+                    ),
+                    SizedBox(height: colors.spacingXl),
+                    AppButton(
+                      label: 'Iniciar sesión local de demostración',
+                      icon: Icons.login,
+                      onPressed: _startDemoSession,
+                      fullWidth: true,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
     }
+
     final stale = !_online || _lastSync == null;
     return Scaffold(
-      appBar: AppBar(title: const Text('CashControl'), actions: [IconButton(onPressed: _logout, tooltip: 'Cerrar sesión y borrar datos', icon: const Icon(Icons.logout))]),
+      backgroundColor: colors.surface,
+      appBar: AppBar(
+        title: const Text('CashControl'),
+        actions: [
+          Semantics(
+            label: 'Cerrar sesión y borrar datos',
+            button: true,
+            child: IconButton(
+              onPressed: _logout,
+              tooltip: 'Cerrar sesión y borrar datos',
+              icon: const Icon(Icons.logout),
+            ),
+          ),
+        ],
+      ),
       body: RefreshIndicator(
         onRefresh: _checkConnectivity,
-        child: ListView(padding: const EdgeInsets.all(16), children: [
-          _StatusBanner(online: _online, stale: stale, syncing: _syncing, lastSync: _age(_lastSync), error: _error),
-          const SizedBox(height: 16),
-          const Text('Diagnóstico de API', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-          Text(_apiStatus),
-          TextButton.icon(onPressed: checkApiConnection, icon: const Icon(Icons.wifi_find), label: const Text('Probar conexión con API')),
-          const Divider(),
-          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-            const Text('Gastos locales', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-            FilledButton.icon(onPressed: _addExpense, icon: const Icon(Icons.add), label: const Text('Nuevo gasto')),
-          ]),
-          if (_expenses.isEmpty) const Padding(padding: EdgeInsets.all(24), child: Text('No hay gastos guardados localmente.')),
-          ..._expenses.map((expense) => ListTile(
-            leading: Icon(expense.isPending ? Icons.cloud_upload : Icons.cloud_done),
-            title: Text('${expense.amount.toStringAsFixed(2)} - ${expense.description}'),
-            subtitle: Text(expense.isPending ? 'Pendiente de sincronización' : 'Sincronizado'),
-          )),
-        ]),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final isWide = constraints.maxWidth >= 600;
+            final content = <Widget>[
+              _StatusBanner(
+                online: _online,
+                stale: stale,
+                syncing: _syncing,
+                lastSync: _age(_lastSync),
+                error: _error,
+              ),
+              SizedBox(height: colors.spacingLg),
+              Text('Diagnóstico de API', style: Theme.of(context).textTheme.titleMedium),
+              SizedBox(height: colors.spacingSm),
+              Text(
+                _apiStatus,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: colors.textSecondary),
+              ),
+              SizedBox(height: colors.spacingSm),
+              AppButton(
+                label: 'Probar conexión con API',
+                icon: Icons.wifi_find,
+                onPressed: checkApiConnection,
+                variant: AppButtonVariant.secondary,
+              ),
+              SizedBox(height: colors.spacingXl),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Expanded(child: Text('Gastos locales', style: Theme.of(context).textTheme.titleLarge)),
+                  AppButton(
+                    label: 'Nuevo gasto',
+                    icon: Icons.add,
+                    onPressed: _addExpense,
+                  ),
+                ],
+              ),
+              SizedBox(height: colors.spacingMd),
+              AsyncStateView(
+                loading: false,
+                error: _error,
+                empty: _expenses.isEmpty,
+                content: Column(
+                  children: [
+                    for (final expense in _expenses)
+                      Padding(
+                        padding: EdgeInsets.only(bottom: colors.spacingMd),
+                        child: ExpenseCard(expense: expense),
+                      ),
+                  ],
+                ),
+              ),
+            ];
+
+            if (isWide) {
+              return SingleChildScrollView(
+                padding: EdgeInsets.all(colors.spacingXl),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      flex: 2,
+                      child: Column(children: content),
+                    ),
+                    SizedBox(width: colors.spacingXl),
+                    Expanded(
+                      flex: 1,
+                      child: Card(
+                        child: Padding(
+                          padding: EdgeInsets.all(colors.spacingLg),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Resumen', style: Theme.of(context).textTheme.titleMedium),
+                              SizedBox(height: colors.spacingMd),
+                              Text('Última actualización: $_lastSync', style: Theme.of(context).textTheme.bodyMedium),
+                              SizedBox(height: colors.spacingSm),
+                              Text(
+                                _online ? 'Modo: online' : 'Modo: offline',
+                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                  color: _online ? colors.success : colors.warning,
+                                ),
+                              ),
+                              SizedBox(height: colors.spacingSm),
+                              Text(
+                                '${_expenses.length} gasto(s) local(es)',
+                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: colors.textSecondary),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }
+
+            return ListView(
+              padding: EdgeInsets.all(colors.spacingXl),
+              children: content,
+            );
+          },
+        ),
       ),
     );
   }
@@ -255,10 +382,35 @@ class _StatusBanner extends StatelessWidget {
   final String? error;
 
   @override
-  Widget build(BuildContext context) => Card(child: Padding(padding: const EdgeInsets.all(12), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-    Text(online ? (syncing ? 'Sincronizando datos...' : 'Conectado') : 'Sin conexión / Datos desactualizados', style: const TextStyle(fontWeight: FontWeight.bold)),
-    if (stale && online) const Text('Datos locales disponibles; última sincronización pendiente.'),
-    Text('Última actualización: $lastSync'),
-    if (error != null) Text(error!, style: const TextStyle(color: Colors.red)),
-  ])));
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).extension<CashControlColors>()!;
+    final statusColor = online ? colors.success : colors.warning;
+    final statusText = online ? (syncing ? 'Sincronizando datos...' : 'Conectado') : 'Sin conexión / Datos desactualizados';
+
+    return Card(
+      child: Padding(
+        padding: EdgeInsets.all(colors.spacingLg),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.circle, size: 10, color: statusColor),
+                SizedBox(width: colors.spacingSm),
+                Text(statusText, style: Theme.of(context).textTheme.titleMedium),
+              ],
+            ),
+            SizedBox(height: colors.spacingSm),
+            if (stale && online)
+              Text('Datos locales disponibles; última sincronización pendiente.', style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: colors.textSecondary)),
+            Text('Última actualización: $lastSync', style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: colors.textSecondary)),
+            if (error != null) ...[
+              SizedBox(height: colors.spacingSm),
+              Text(error!, style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: colors.error)),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
 }
