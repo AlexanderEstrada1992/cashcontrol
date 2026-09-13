@@ -1,3 +1,8 @@
+import 'package:json_annotation/json_annotation.dart';
+
+part 'expense.g.dart';
+
+@JsonSerializable()
 class Expense {
   const Expense({
     required this.localId,
@@ -14,20 +19,33 @@ class Expense {
     this.lastSyncedAt,
   });
 
+  @JsonKey(defaultValue: '')
   final String localId;
+  @JsonKey(name: 'server_id')
   final int? serverId;
+  @JsonKey(name: 'client_operation_id')
   final String clientOperationId;
+  @JsonKey(name: 'user_id')
   final String userId;
+  @JsonKey(name: 'category_id')
   final String categoryId;
   final double amount;
   final String description;
+  @JsonKey(name: 'date')
   final DateTime date;
+  @JsonKey(name: 'created_at')
   final DateTime createdAt;
+  @JsonKey(name: 'updated_at')
   final DateTime updatedAt;
+  @JsonKey(defaultValue: 'pending')
   final String syncStatus;
+  @JsonKey(name: 'last_synced_at')
   final DateTime? lastSyncedAt;
 
   bool get isPending => syncStatus == 'pending' || syncStatus == 'failed';
+
+  factory Expense.fromJson(Map<String, dynamic> json) => _$ExpenseFromJson(json);
+  Map<String, dynamic> toJson() => _$ExpenseToJson(this);
 
   Map<String, Object?> toMap() => {
         'local_id': localId,

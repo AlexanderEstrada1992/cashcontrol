@@ -1,41 +1,41 @@
 import 'dart:convert';
 
-import 'package:http/http.dart' as http;
-
 import '../models/expense.dart';
+import '../models/user.dart';
+import 'api_client.dart';
 
 class ApiService {
-  ApiService({required this.baseUrl, required this.readToken});
+  ApiService({required this.client});
 
-  final String baseUrl;
-  final Future<String?> Function() readToken;
+  final ApiClient client;
 
-  Future<Map<String, String>> _headers() async {
-    final token = await readToken();
-    return {
-      'Content-Type': 'application/json',
-      if (token != null) 'Authorization': 'Bearer $token',
-    };
+  Future<AuthSession> login({required String username, required String password}) async {
+    final response = await client.post('/api/auth/login', authenticated: false, body: {
+      'username': username,
+      'password': password,
+    });
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    return AuthSession(
+      user: User(id: data['userId'] as String, username: username),
+      accessToken: data['accessToken'] as String,
+      refreshToken: data['refreshToken'] as String,
+    );
+  }
+
+  Future<Map<String, dynamic>> health() async {
+    final response = await client.get('/api/health', authenticated: false);
+    return jsonDecode(response.body) as Map<String, dynamic>;
   }
 
   Future<List<Expense>> fetchExpenses(String userId) async {
-    final response = await http.get(
-      Uri.parse('$baseUrl/api/gastos?user_id=${Uri.encodeQueryComponent(userId)}'),
-      headers: await _headers(),
-    );
-    _ensureSuccess(response);
+    final response = await client.get('/api/gastos', queryParameters: {'user_id': userId});
     final decoded = jsonDecode(response.body) as Map<String, dynamic>;
     final rows = (decoded['data'] as List<dynamic>? ?? const []);
     return rows.map((row) => _expenseFromApi(row as Map<String, dynamic>, userId)).toList();
   }
 
   Future<Expense> createExpense(Expense expense) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/api/gastos'),
-      headers: await _headers(),
-      body: jsonEncode(expense.toApiPayload()),
-    );
-    _ensureSuccess(response);
+    final response = await client.post('/api/gastos', body: expense.toApiPayload());
     final decoded = jsonDecode(response.body) as Map<String, dynamic>;
     return _expenseFromApi(decoded['data'] as Map<String, dynamic>, expense.userId);
   }
@@ -58,17 +58,11 @@ class ApiService {
     );
   }
 
-  void _ensureSuccess(http.Response response) {
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw ApiException('HTTP ${response.statusCode}: ${response.body}');
-    }
-  }
 }
 
-class ApiException implements Exception {
-  const ApiException(this.message);
-  final String message;
-
-  @override
-  String toString() => message;
+class AuthSession {
+  const AuthSession({required this.user, required this.accessToken, required this.refreshToken});
+  final User user;
+  final String accessToken;
+  final String refreshToken;
 }

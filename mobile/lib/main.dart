@@ -1,21 +1,21 @@
-import 'dart:convert';
-
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 
 import 'core/theme/cashcontrol_theme.dart';
 import 'models/expense.dart';
 import 'repositories/expense_repository.dart';
 import 'services/api_service.dart';
+import 'services/api_client.dart';
+import 'services/api_errors.dart';
 import 'services/local_database.dart';
 import 'services/secure_storage_service.dart';
 import 'services/sync_service.dart';
 import 'widgets/app_button.dart';
+import 'widgets/app_text_field.dart';
 import 'widgets/async_state_view.dart';
 import 'widgets/expense_card.dart';
 
-const String apiBaseUrl = String.fromEnvironment('API_BASE_URL', defaultValue: 'http://10.0.2.2:3000');
+const String apiBaseUrl = String.fromEnvironment('API_BASE_URL', defaultValue: 'http://127.0.0.1:3000');
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -47,6 +47,7 @@ class _HomeScreenState extends State<HomeScreen> {
   late final ExpenseRepository _repository;
   late final SyncService _syncService;
   late final ApiService _api;
+  late final ApiClient _apiClient;
   String? _userId;
   String _apiStatus = 'Sin comprobar';
   List<Expense> _expenses = const [];
@@ -54,12 +55,25 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _online = true;
   bool _loading = true;
   bool _syncing = false;
+  bool _checkingApi = false;
+  String? _authStatus;
+  bool _loggingIn = false;
+  final _usernameController = TextEditingController(text: 'demo-user');
+  final _passwordController = TextEditingController(text: 'demo-password');
+  Map<String, String> _loginFieldErrors = const {};
   String? _error;
 
   @override
   void initState() {
     super.initState();
-    _api = ApiService(baseUrl: apiBaseUrl, readToken: _secureStorage.getAccessToken);
+    _apiClient = ApiClient(
+      baseUrl: apiBaseUrl,
+      storage: _secureStorage,
+      onTokenRefreshed: () {
+        if (mounted) setState(() => _authStatus = 'Sesión renovada automáticamente.');
+      },
+    );
+    _api = ApiService(client: _apiClient);
     _repository = ExpenseRepository(database: _localDatabase, api: _api);
     _syncService = SyncService(repository: _repository);
     _initialize();
@@ -67,6 +81,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _initialize() async {
     _userId = await _secureStorage.getUserId();
+    if (_userId != null && await _secureStorage.getAccessToken() == null) {
+      _userId = null;
+    }
     final connectivity = await Connectivity().checkConnectivity();
     _online = connectivity.any((result) => result != ConnectivityResult.none);
     if (_userId != null) {
@@ -98,8 +115,12 @@ class _HomeScreenState extends State<HomeScreen> {
       await _syncService.sync(_userId!);
       await _repository.refreshFromServer(_userId!);
       await _loadLocal();
-    } catch (_) {
-      if (mounted) setState(() => _error = 'No se pudo sincronizar; se conservaron los datos locales.');
+    } catch (error) {
+      if (mounted) {
+        setState(() => _error = error is AppApiException
+            ? error.message
+            : 'No se pudo sincronizar; se conservaron los datos locales.');
+      }
     } finally {
       if (mounted) setState(() => _syncing = false);
     }
@@ -119,26 +140,59 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> checkApiConnection() async {
+    if (_checkingApi) return;
+    setState(() {
+      _checkingApi = true;
+      _apiStatus = 'Comprobando conexión...';
+    });
     try {
-      final response = await http.get(Uri.parse('$apiBaseUrl/api/health'));
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final data = await _api.health();
       if (mounted) {
-        setState(() => _apiStatus = response.statusCode == 200
-            ? '${data['message']} - Base de datos: ${data['database']}'
-            : 'Error HTTP: ${response.statusCode}');
+        setState(() => _apiStatus = '${data['message']} - Base de datos: ${data['database']}');
       }
     } catch (_) {
       if (mounted) setState(() => _apiStatus = 'No fue posible conectar con la API');
+    } finally {
+      if (mounted) setState(() => _checkingApi = false);
     }
   }
 
-  Future<void> _startDemoSession() async {
-    final now = DateTime.now().microsecondsSinceEpoch;
-    await _secureStorage.saveSession(accessToken: 'access-$now', refreshToken: 'refresh-$now', userId: 'demo-user');
-    setState(() => _userId = 'demo-user');
+  Future<void> _login() async {
+    if (_loggingIn) return;
+    setState(() {
+      _loggingIn = true;
+      _loginFieldErrors = const {};
+    });
+    try {
+      final session = await _api.login(
+        username: _usernameController.text.trim(),
+        password: _passwordController.text,
+      );
+      await _secureStorage.saveSession(
+        accessToken: session.accessToken,
+        refreshToken: session.refreshToken,
+        userId: session.user.id,
+      );
+      if (mounted) setState(() => _userId = session.user.id);
+    } on ValidationFailure catch (error) {
+      if (mounted) setState(() => _loginFieldErrors = error.fieldErrors);
+      return;
+    } on AuthenticationFailure catch (error) {
+      if (mounted) setState(() => _loginFieldErrors = {'form': error.message});
+      return;
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(error is AppApiException ? error.message : 'No fue posible iniciar sesión con el servidor.'),
+        ));
+      }
+      return;
+    } finally {
+      if (mounted) setState(() => _loggingIn = false);
+    }
     await _loadLocal();
     _syncService.start(
-      userId: 'demo-user',
+      userId: _userId!,
       onChanged: _loadLocal,
       onConnectivityChanged: _setConnectivity,
     );
@@ -169,8 +223,25 @@ class _HomeScreenState extends State<HomeScreen> {
     ));
     if (created != true || _userId == null) return;
     final amount = double.tryParse(amountController.text.replaceAll(',', '.'));
-    if (amount == null || amount <= 0) return;
-    await _repository.createOfflineExpense(userId: _userId!, amount: amount, description: descriptionController.text.trim(), date: DateTime.now().toUtc());
+    final description = descriptionController.text.trim();
+    if (amount == null || amount <= 0) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('El monto debe ser mayor que 0.')));
+      return;
+    }
+    if (description.isEmpty) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('La descripción es obligatoria.')));
+      return;
+    }
+    final date = DateTime.now().toUtc();
+    if (await _repository.hasLocalExpense(userId: _userId!, amount: amount, description: description, date: date)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Ya existe un gasto igual para hoy.')),
+        );
+      }
+      return;
+    }
+    await _repository.createOfflineExpense(userId: _userId!, amount: amount, description: description, date: date);
     await _loadLocal();
     if (_online) {
       await _synchronize();
@@ -188,6 +259,8 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     _syncService.dispose();
+    _usernameController.dispose();
+    _passwordController.dispose();
     super.dispose();
   }
 
@@ -221,19 +294,39 @@ class _HomeScreenState extends State<HomeScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Acceso local',
+                      'Iniciar sesión',
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
                     SizedBox(height: colors.spacingMd),
                     Text(
-                      'Inicia una sesión local de demostración para explorar el flujo de gastos y sincronización.',
+                      'Accede al backend de CashControl para consultar tus gastos y sincronizarlos.',
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: colors.textSecondary),
                     ),
+                    SizedBox(height: colors.spacingLg),
+                    AppTextField(
+                      controller: _usernameController,
+                      label: 'Usuario',
+                      prefixIcon: Icons.person_outline,
+                      errorText: _loginFieldErrors['username'],
+                    ),
+                    SizedBox(height: colors.spacingMd),
+                    AppTextField(
+                      controller: _passwordController,
+                      label: 'Contraseña',
+                      prefixIcon: Icons.lock_outline,
+                      obscureText: true,
+                      errorText: _loginFieldErrors['password'],
+                    ),
+                    if (_loginFieldErrors['form'] != null) ...[
+                      SizedBox(height: colors.spacingSm),
+                      Text(_loginFieldErrors['form']!, style: TextStyle(color: colors.error)),
+                    ],
                     SizedBox(height: colors.spacingXl),
                     AppButton(
-                      label: 'Iniciar sesión local de demostración',
+                      label: 'Iniciar sesión',
                       icon: Icons.login,
-                      onPressed: _startDemoSession,
+                      loading: _loggingIn,
+                      onPressed: _loggingIn ? null : _login,
                       fullWidth: true,
                     ),
                   ],
@@ -274,6 +367,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 syncing: _syncing,
                 lastSync: _age(_lastSync),
                 error: _error,
+                authStatus: _authStatus,
               ),
               SizedBox(height: colors.spacingLg),
               Text('Diagnóstico de API', style: Theme.of(context).textTheme.titleMedium),
@@ -286,7 +380,8 @@ class _HomeScreenState extends State<HomeScreen> {
               AppButton(
                 label: 'Probar conexión con API',
                 icon: Icons.wifi_find,
-                onPressed: checkApiConnection,
+                loading: _checkingApi,
+                onPressed: _checkingApi ? null : checkApiConnection,
                 variant: AppButtonVariant.secondary,
               ),
               SizedBox(height: colors.spacingXl),
@@ -374,12 +469,13 @@ class _HomeScreenState extends State<HomeScreen> {
 }
 
 class _StatusBanner extends StatelessWidget {
-  const _StatusBanner({required this.online, required this.stale, required this.syncing, required this.lastSync, this.error});
+  const _StatusBanner({required this.online, required this.stale, required this.syncing, required this.lastSync, this.error, this.authStatus});
   final bool online;
   final bool stale;
   final bool syncing;
   final String lastSync;
   final String? error;
+  final String? authStatus;
 
   @override
   Widget build(BuildContext context) {
@@ -407,6 +503,10 @@ class _StatusBanner extends StatelessWidget {
             if (error != null) ...[
               SizedBox(height: colors.spacingSm),
               Text(error!, style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: colors.error)),
+            ],
+            if (authStatus != null) ...[
+              SizedBox(height: colors.spacingSm),
+              Text(authStatus!, style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: colors.success)),
             ],
           ],
         ),

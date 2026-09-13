@@ -2,56 +2,52 @@ import 'dart:convert';
 
 import 'package:sqflite/sqflite.dart';
 
+import '../data/expense_local_data_source.dart';
+import '../data/expense_remote_data_source.dart';
 import '../models/expense.dart';
 import '../services/api_service.dart';
 import '../services/local_database.dart';
 
 class ExpenseRepository {
-  ExpenseRepository({required this.database, required this.api});
+  ExpenseRepository({required this.database, required this.api, ExpenseLocalDataSource? local, ExpenseRemoteDataSource? remote})
+      : local = local ?? ExpenseLocalDataSource(database),
+        remote = remote ?? ExpenseRemoteDataSource(api);
 
   final LocalDatabase database;
   final ApiService api;
+  final ExpenseLocalDataSource local;
+  final ExpenseRemoteDataSource remote;
 
-  Future<List<Expense>> getLocalExpenses(String userId) async {
+  Future<List<Expense>> getLocalExpenses(String userId) => local.getExpenses(userId);
+
+  Future<DateTime?> getLastSync(String userId) => local.getLastSync(userId);
+
+  Future<bool> hasLocalExpense({
+    required String userId,
+    required double amount,
+    required String description,
+    required DateTime date,
+  }) async {
     final db = await database.database;
     final rows = await db.query(
       'expenses',
-      where: 'user_id = ?',
-      whereArgs: [userId],
-      orderBy: 'expense_date DESC, created_at DESC',
-    );
-    return rows.map(Expense.fromMap).toList();
-  }
-
-  Future<DateTime?> getLastSync(String userId) async {
-    final db = await database.database;
-    final rows = await db.query(
-      'app_metadata',
-      where: 'key = ?',
-      whereArgs: ['last_sync_$userId'],
+      columns: ['local_id'],
+      where: 'user_id = ? AND amount = ? AND description = ? AND expense_date >= ? AND expense_date < ?',
+      whereArgs: [
+        userId,
+        amount,
+        description,
+        DateTime.utc(date.year, date.month, date.day).toIso8601String(),
+        DateTime.utc(date.year, date.month, date.day + 1).toIso8601String(),
+      ],
       limit: 1,
     );
-    if (rows.isEmpty) return null;
-    return DateTime.tryParse(rows.first['value']! as String);
+    return rows.isNotEmpty;
   }
 
   Future<void> refreshFromServer(String userId) async {
-    final remoteExpenses = await api.fetchExpenses(userId);
-    final db = await database.database;
-    await db.transaction((transaction) async {
-      for (final expense in remoteExpenses) {
-        await transaction.insert(
-          'expenses',
-          expense.toMap(),
-          conflictAlgorithm: ConflictAlgorithm.replace,
-        );
-      }
-      await transaction.insert(
-        'app_metadata',
-        {'key': 'last_sync_$userId', 'value': DateTime.now().toUtc().toIso8601String()},
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
-    });
+    final remoteExpenses = await remote.fetchExpenses(userId);
+    await local.saveRemoteExpenses(userId, remoteExpenses);
   }
 
   Future<Expense> createOfflineExpense({
@@ -75,22 +71,7 @@ class ExpenseRepository {
       updatedAt: now,
       syncStatus: 'pending',
     );
-    final db = await database.database;
-    await db.transaction((transaction) async {
-      await transaction.insert('expenses', expense.toMap());
-      await transaction.insert('pending_operations', {
-        'client_operation_id': operationId,
-        'operation_type': 'create',
-        'entity': 'expense',
-        'payload': jsonEncode(expense.toApiPayload()),
-        'attempt_count': 0,
-        'next_attempt_at': now.toIso8601String(),
-        'status': 'pending',
-        'created_at': now.toIso8601String(),
-        'user_id': userId,
-      });
-    });
-    return expense;
+    return local.createPending(expense);
   }
 
   Future<SyncReport> syncPending(String userId) async {

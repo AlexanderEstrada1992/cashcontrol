@@ -2,11 +2,67 @@ require('dotenv').config();
 
 const express = require('express');
 const oracledb = require('oracledb');
+const jwt = require('jsonwebtoken');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const JWT_SECRET = process.env.JWT_SECRET;
+const ACCESS_TOKEN_TTL = process.env.ACCESS_TOKEN_TTL || '2m';
+const REFRESH_TOKEN_TTL = process.env.REFRESH_TOKEN_TTL || '7d';
+const AUTH_USER = process.env.AUTH_USER || 'demo-user';
+const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'demo-password';
+
+if (!JWT_SECRET) {
+  throw new Error('JWT_SECRET debe configurarse en backend/.env');
+}
 
 app.use(express.json());
+
+function issueTokens(userId) {
+  return {
+    accessToken: jwt.sign({ sub: userId, type: 'access' }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_TTL }),
+    refreshToken: jwt.sign({ sub: userId, type: 'refresh' }, JWT_SECRET, { expiresIn: REFRESH_TOKEN_TTL })
+  };
+}
+
+function requireAuth(req, res, next) {
+  const header = req.get('Authorization') || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (!token) return res.status(401).json({ success: false, message: 'Sesión no autorizada' });
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    if (payload.type !== 'access') throw new Error('Tipo de token inválido');
+    req.userId = String(payload.sub);
+    next();
+  } catch (_) {
+    return res.status(401).json({ success: false, message: 'Sesión expirada' });
+  }
+}
+
+app.post('/api/auth/login', (req, res) => {
+  const { username, password } = req.body || {};
+  if (!username || !password) {
+    return res.status(422).json({ success: false, message: 'Error de validación', errors: {
+      username: 'El usuario es obligatorio', password: 'La contraseña es obligatoria'
+    } });
+  }
+  if (username !== AUTH_USER || password !== AUTH_PASSWORD) {
+    return res.status(401).json({ success: false, message: 'Credenciales inválidas' });
+  }
+  return res.json({ success: true, userId: AUTH_USER, ...issueTokens(AUTH_USER) });
+});
+
+app.post('/api/auth/refresh', (req, res) => {
+  const { refreshToken } = req.body || {};
+  if (!refreshToken) return res.status(401).json({ success: false, message: 'Refresh token requerido' });
+  try {
+    const payload = jwt.verify(refreshToken, JWT_SECRET);
+    if (payload.type !== 'refresh') throw new Error('Tipo de token inválido');
+    return res.json({ success: true, userId: String(payload.sub), ...issueTokens(String(payload.sub)) });
+  } catch (_) {
+    return res.status(401).json({ success: false, message: 'Refresh token inválido o expirado' });
+  }
+});
 
 async function ensureExpensesTable(connection) {
   try {
@@ -42,7 +98,7 @@ function expenseFromRow(row) {
   };
 }
 
-app.get('/api/gastos', async (req, res) => {
+app.get('/api/gastos', requireAuth, async (req, res) => {
   let connection;
   try {
     connection = await oracledb.getConnection({
@@ -53,7 +109,7 @@ app.get('/api/gastos', async (req, res) => {
     await ensureExpensesTable(connection);
     const result = await connection.execute(
       `SELECT * FROM CC_GASTOS_SYNC WHERE USER_ID = :userId ORDER BY EXPENSE_DATE DESC`,
-      { userId: String(req.query.user_id || '') },
+      { userId: req.userId },
       { outFormat: oracledb.OUT_FORMAT_OBJECT }
     );
     res.json({ success: true, data: result.rows.map(expenseFromRow) });
@@ -65,12 +121,15 @@ app.get('/api/gastos', async (req, res) => {
   }
 });
 
-app.post('/api/gastos', async (req, res) => {
+app.post('/api/gastos', requireAuth, async (req, res) => {
   let connection;
   const { client_operation_id: operationId, user_id: userId, category_id: categoryId,
     amount, description, date, updated_at: updatedAt } = req.body;
-  if (!operationId || !userId || !categoryId || !amount || !date || !updatedAt) {
-    return res.status(400).json({ success: false, message: 'Faltan datos obligatorios del gasto' });
+  if (userId !== req.userId || !operationId || !categoryId || typeof amount !== 'number' || amount <= 0 || !date || !updatedAt || !String(description || '').trim()) {
+    return res.status(422).json({ success: false, message: 'Error de validación', errors: {
+      amount: typeof amount !== 'number' || amount <= 0 ? 'El monto debe ser mayor que 0' : undefined,
+      description: !String(description || '').trim() ? 'La descripción es obligatoria' : undefined
+    } });
   }
   try {
     connection = await oracledb.getConnection({

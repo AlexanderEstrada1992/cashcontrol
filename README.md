@@ -229,6 +229,70 @@ API de CashControl funcionando correctamente - Base de datos: CONNECTED
 
 ## Hot Reload
 
+## Semana 13 – Integración móvil con backend
+
+La integración de la Semana 13 conserva SQLite, `pending_operations`,
+`client_operation_id` y `SyncService` de la Semana 12, pero centraliza el
+consumo HTTP y agrega autenticación real.
+
+### Arquitectura
+
+```text
+HomeScreen
+   -> ExpenseRepository
+       -> ExpenseRemoteDataSource -> ApiService -> ApiClient -> API REST -> Oracle 19c
+       -> ExpenseLocalDataSource -> SQLite / pending_operations
+```
+
+`ApiClient` es la única instancia reutilizable para HTTP. La URL se configura
+con `--dart-define=API_BASE_URL=...`; para un teléfono físico conectado por
+USB se puede usar `adb reverse tcp:3000 tcp:3000` y
+`http://127.0.0.1:3000`. Para un emulador Android se usa `http://10.0.2.2:3000`.
+El cliente aplica timeouts de conexión, recepción y envío, agrega Bearer desde
+`flutter_secure_storage`, renueva el token ante 401 una sola vez y reintenta
+únicamente GET ante un fallo de red.
+
+### Autenticación y errores
+
+El backend expone `POST /api/auth/login` y `POST /api/auth/refresh` con JWT.
+Los tokens solo se almacenan en almacenamiento cifrado. Los errores se
+traducen a cuatro familias: sin conexión/timeout, autenticación 401,
+validación 422 y error de servidor 5xx. Las creaciones POST no se reintentan
+automáticamente y mantienen `client_operation_id` para idempotencia.
+
+### Modelos y divergencias
+
+`Expense` y `User` usan `json_serializable` con archivos `.g.dart` generados.
+La persistencia SQLite conserva sus nombres (`local_id`, `expense_date`, etc.)
+y el contrato REST conserva `server_id`, `client_operation_id`, `category_id`,
+`amount`, `description`, `date`, `created_at` y `updated_at`. No se encontró
+una divergencia que requiera `@JsonKey`; el mapeo SQLite se mantiene explícito
+en `Expense.toMap` y `Expense.fromMap`.
+
+| Servidor | Cliente | Divergencia |
+| --- | --- | --- |
+| `server_id` | `serverId` / `server_id` | No se renombra en el contrato REST; SQLite usa `server_id`. |
+| `expense_date` | `date` | Solo existe en SQLite; REST usa `date`. |
+
+### Comandos
+
+```text
+cd backend
+npm install
+node server.js
+
+cd mobile
+flutter pub get
+dart run build_runner build
+flutter analyze
+flutter test
+flutter run -d R58R11JDHBL --dart-define=API_BASE_URL=http://127.0.0.1:3000
+```
+
+En producción se debe usar HTTPS y un `JWT_SECRET` fuerte mediante variables
+de entorno. No se deben colocar credenciales, tokens ni secretos en Flutter,
+SQLite, logs o `--dart-define`.
+
 El funcionamiento de Hot Reload fue verificado modificando el título de la aplicación desde:
 
 ```text
