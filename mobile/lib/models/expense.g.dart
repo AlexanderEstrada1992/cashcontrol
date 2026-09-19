@@ -21,6 +21,8 @@ Expense _$ExpenseFromJson(Map<String, dynamic> json) => Expense(
   lastSyncedAt: json['last_synced_at'] == null
       ? null
       : DateTime.parse(json['last_synced_at'] as String),
+  latitude: (json['latitude'] as num?)?.toDouble(),
+  longitude: (json['longitude'] as num?)?.toDouble(),
 );
 
 Map<String, dynamic> _$ExpenseToJson(Expense instance) => <String, dynamic>{
@@ -36,4 +38,6 @@ Map<String, dynamic> _$ExpenseToJson(Expense instance) => <String, dynamic>{
   'updated_at': instance.updatedAt.toIso8601String(),
   'syncStatus': instance.syncStatus,
   'last_synced_at': instance.lastSyncedAt?.toIso8601String(),
+  'latitude': instance.latitude,
+  'longitude': instance.longitude,
 };

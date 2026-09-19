@@ -1,4 +1,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Cámara: capturar la foto del recibo de un gasto (Semana 14). -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <!-- Ubicación aproximada/precisa: etiquetar el lugar de un gasto (Semana 14). -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <!-- No se requiere cámara para instalar la app en dispositivos sin cámara. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
+
     <application
         android:label="mobile"
         android:name="${applicationName}"

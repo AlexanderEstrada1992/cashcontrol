@@ -404,3 +404,92 @@ Al iniciar una sesión se leen primero los gastos locales. Si hay red, se actual
 Cerrar sesión elimina access token, refresh token, credenciales seguras, gastos del usuario, operaciones pendientes, metadatos de sincronización y estado en memoria antes de volver a la pantalla de inicio. Así no quedan datos financieros del usuario anterior en la aplicación.
 
 Las funcionalidades definitivas de CashControl, como autenticación, roles, CRUD, ingresos, gastos, presupuestos y optimización del backend, continuarán desarrollándose progresivamente.
+
+## Semana 14 – Funcionalidades nativas
+
+Se incorporaron dos capacidades nativas del dispositivo al prototipo integrado en la Semana 13, sin modificar la persistencia local ni el backend existentes.
+
+### Capacidades seleccionadas y justificación
+
+| Capacidad | Esencial/Opcional | Justificación |
+| --- | --- | --- |
+| Cámara (foto del recibo) | Opcional | Permite adjuntar evidencia visual de un gasto. La app funciona igual sin la foto. |
+| Ubicación (GPS) | Opcional | Permite registrar el lugar donde ocurrió el gasto. La app funciona igual sin la ubicación. |
+
+Ambas se solicitan únicamente al pulsar los botones **"Adjuntar foto del recibo"** y **"Adjuntar ubicación"** dentro del diálogo **Nuevo gasto**, nunca al iniciar la aplicación.
+
+### Verificación de los plugins adoptados
+
+| Plugin | Versión | Criterios verificados |
+| --- | --- | --- |
+| `image_picker` | 1.2.3 | Mantenido por el equipo de Flutter (`flutter favorite`), sin permisos de galería (usa el selector/cámara del sistema), actualizado activamente. |
+| `geolocator` | 14.0.2 | Paquete líder de la comunidad para geolocalización, expone por separado el permiso y el estado del servicio de ubicación (`isLocationServiceEnabled`), mantenido activamente. |
+| `permission_handler` | 13.0.2 | Estándar de facto para gestionar los cuatro estados de permisos runtime en Flutter (`granted`, `denied`, `permanentlyDenied`, `restricted`/`limited`), mantenido activamente. |
+
+No se utilizó ningún plugin de galería ni de almacenamiento de archivos multimedia: la captura de fotos usa directamente la cámara del sistema (`ImageSource.camera`), por lo que no se declaran permisos de acceso amplio a la galería.
+
+### Permisos declarados
+
+**Android** (`mobile/android/app/src/main/AndroidManifest.xml`):
+
+| Permiso | Propósito concreto en CashControl |
+| --- | --- |
+| `android.permission.CAMERA` | Fotografiar el recibo de un gasto nuevo. |
+| `android.permission.ACCESS_FINE_LOCATION` | Obtener coordenadas precisas del lugar de un gasto. |
+| `android.permission.ACCESS_COARSE_LOCATION` | Alternativa de menor precisión para la misma función. |
+
+Se declararon además `<uses-feature android:name="android.hardware.camera" android:required="false"/>` y su variante `autofocus`, para no excluir en la tienda a dispositivos sin cámara.
+
+**iOS** (cadenas de propósito a declarar en `Info.plist` si se agrega la plataforma; este proyecto se desarrolla y prueba en Android físico):
+
+| Clave | Texto de propósito |
+| --- | --- |
+| `NSCameraUsageDescription` | "CashControl necesita acceder a la cámara para fotografiar el recibo de un gasto." |
+| `NSLocationWhenInUseUsageDescription` | "CashControl necesita tu ubicación para registrar el lugar donde ocurrió un gasto." |
+
+### Gestión de los cuatro estados de permiso
+
+`mobile/lib/services/camera_capture_service.dart` y `mobile/lib/services/location_capture_service.dart` encapsulan la solicitud y devuelven un resultado tipado con los cuatro estados:
+
+- **Concedido (`granted`)**: se ejecuta la captura (foto o coordenadas) y se adjunta al gasto.
+- **Denegado (`denied`)**: se informa al usuario y se permite volver a intentarlo.
+- **Denegado permanentemente (`permanentlyDenied`)**: se muestra un botón **"Abrir ajustes"** que invoca `openAppSettings()` (cámara) o `Geolocator.openAppSettings()` (ubicación).
+- **Restringido (`restricted`)**: se informa que el sistema operativo bloquea la capacidad (por ejemplo, control parental) y se continúa sin ella.
+
+Para ubicación existe un quinto caso, verificado por separado del permiso: **servicio de ubicación (GPS) desactivado**, detectado con `Geolocator.isLocationServiceEnabled()`, con botón **"Abrir ajustes"** que lleva a `Geolocator.openLocationSettings()`.
+
+### Matriz de degradación
+
+| Situación | Comportamiento de la aplicación |
+| --- | --- |
+| Permiso concedido | Se adjunta la foto o la ubicación al gasto; se guarda localmente y se envía al backend si hay conexión. |
+| Permiso denegado | Se informa el motivo; el gasto puede guardarse sin foto ni ubicación. |
+| Permiso denegado permanentemente | Se muestra botón para abrir los ajustes de la aplicación; el gasto puede guardarse sin la capacidad. |
+| Permiso restringido | Se informa que la capacidad no está disponible en el dispositivo; el gasto puede guardarse igualmente. |
+| GPS desactivado (permiso concedido) | Se informa que el servicio de ubicación está apagado, con botón para abrir los ajustes de ubicación. |
+| Sin conexión al guardar | El gasto (con o sin foto/ubicación) se guarda en SQLite y en `pending_operations`, igual que en la Semana 12. |
+
+### Integración con persistencia local y backend
+
+- `mobile/lib/services/local_database.dart`: la tabla `expenses` incorpora las columnas `receipt_photo_path`, `latitude` y `longitude` (migración de versión 2 a 3, sin pérdida de datos).
+- `mobile/lib/models/expense.dart`: agrega `receiptPhotoPath` (solo local, no se envía al backend), `latitude` y `longitude` (sí se envían).
+- `mobile/lib/repositories/expense_repository.dart`: `createOfflineExpense` acepta los tres campos opcionales; al sincronizar una operación pendiente se preserva la foto local (que el backend no almacena) y se conservan las coordenadas ya sincronizadas.
+- `backend/server.js`: la tabla `CC_GASTOS_SYNC` agrega columnas `LATITUDE`/`LONGITUDE` (con migración automática para instalaciones existentes) y el endpoint `POST /api/gastos` valida y persiste ambas de forma opcional.
+
+### Cumplimiento de la tienda y nivel de API
+
+- No se declaran permisos de acceso amplio a la galería ni al almacenamiento; solo cámara y ubicación, ambos justificados por una función concreta.
+- `compileSdk`/`targetSdk` del proyecto usan el valor por defecto de Flutter para este SDK: **API 36 (Android 16)**, ya conforme con la exigencia de Google Play vigente desde el 31 de agosto de 2026.
+
+### Casos de prueba en dispositivo físico
+
+| # | Caso | Resultado esperado |
+| --- | --- | --- |
+| 1 | Adjuntar foto con permiso de cámara concedido | La foto se captura y se muestra en el diálogo antes de guardar. |
+| 2 | Adjuntar foto denegando el permiso | Mensaje de permiso denegado; se puede reintentar o guardar sin foto. |
+| 3 | Adjuntar foto con denegación permanente | Botón "Abrir ajustes" visible; al conceder el permiso desde ajustes y reintentar, funciona. |
+| 4 | Adjuntar ubicación con GPS apagado | Mensaje de servicio de ubicación desactivado, distinto del mensaje de permiso denegado. |
+| 5 | Crear gasto con foto y ubicación sin conexión, luego sincronizar | El gasto se guarda localmente, se sincroniza al recuperar conexión y conserva la foto local y las coordenadas remotas. |
+
+Estos cinco casos deben ejecutarse y grabarse en el teléfono Android físico usado durante el proyecto, no en el emulador.
+

@@ -1,5 +1,6 @@
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
+import 'dart:io';
 
 import 'core/theme/cashcontrol_theme.dart';
 import 'models/expense.dart';
@@ -7,7 +8,9 @@ import 'repositories/expense_repository.dart';
 import 'services/api_service.dart';
 import 'services/api_client.dart';
 import 'services/api_errors.dart';
+import 'services/camera_capture_service.dart';
 import 'services/local_database.dart';
+import 'services/location_capture_service.dart';
 import 'services/secure_storage_service.dart';
 import 'services/sync_service.dart';
 import 'widgets/app_button.dart';
@@ -44,6 +47,8 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final _secureStorage = SecureStorageService();
   final _localDatabase = LocalDatabase();
+  final _cameraService = CameraCaptureService();
+  final _locationService = LocationCaptureService();
   late final ExpenseRepository _repository;
   late final SyncService _syncService;
   late final ApiService _api;
@@ -207,20 +212,133 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted) setState(() { _userId = null; _expenses = const []; _lastSync = null; });
   }
 
+  Future<bool> _confirmRationale(String message) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Permiso necesario'),
+        content: Text(message),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Ahora no')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Continuar')),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
   Future<void> _addExpense() async {
     final amountController = TextEditingController();
     final descriptionController = TextEditingController();
-    final created = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
-      title: const Text('Nuevo gasto'),
-      content: Column(mainAxisSize: MainAxisSize.min, children: [
-        TextField(controller: amountController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Monto')),
-        TextField(controller: descriptionController, decoration: const InputDecoration(labelText: 'Descripción')),
-      ]),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
-        FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Guardar')),
-      ],
-    ));
+    String? photoPath;
+    double? latitude;
+    double? longitude;
+    String? captureStatus;
+    VoidCallback? settingsAction;
+
+    final created = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Nuevo gasto'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(controller: amountController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Monto')),
+                TextField(controller: descriptionController, decoration: const InputDecoration(labelText: 'Descripción')),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.camera_alt_outlined),
+                  label: Text(photoPath == null ? 'Adjuntar foto del recibo (opcional)' : 'Foto del recibo adjuntada'),
+                  onPressed: () async {
+                    final accepted = await _confirmRationale(
+                      'CashControl utilizará la cámara únicamente para fotografiar el recibo de este gasto.',
+                    );
+                    if (!accepted) return;
+                    final result = await _cameraService.captureReceiptPhoto();
+                    setDialogState(() {
+                      settingsAction = null;
+                      switch (result.state) {
+                        case CameraPermissionState.granted:
+                          photoPath = result.filePath;
+                          captureStatus = result.filePath == null ? 'Captura de foto cancelada.' : 'Foto del recibo adjuntada.';
+                          break;
+                        case CameraPermissionState.denied:
+                          captureStatus = 'Permiso de cámara denegado. Puedes intentarlo nuevamente.';
+                          break;
+                        case CameraPermissionState.permanentlyDenied:
+                          captureStatus = 'Permiso de cámara bloqueado permanentemente. Actívalo desde los ajustes del sistema.';
+                          settingsAction = () => _cameraService.openSettings();
+                          break;
+                        case CameraPermissionState.restricted:
+                          captureStatus = 'La cámara está restringida en este dispositivo.';
+                          break;
+                      }
+                    });
+                  },
+                ),
+                if (photoPath != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.file(File(photoPath!), height: 120, fit: BoxFit.cover),
+                    ),
+                  ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.location_on_outlined),
+                  label: Text(latitude == null ? 'Adjuntar ubicación (opcional)' : 'Ubicación adjuntada (${latitude!.toStringAsFixed(4)}, ${longitude!.toStringAsFixed(4)})'),
+                  onPressed: () async {
+                    final accepted = await _confirmRationale(
+                      'CashControl utilizará tu ubicación únicamente para registrar el lugar de este gasto.',
+                    );
+                    if (!accepted) return;
+                    final result = await _locationService.captureCurrentLocation();
+                    setDialogState(() {
+                      settingsAction = null;
+                      switch (result.state) {
+                        case LocationAvailability.granted:
+                          latitude = result.latitude;
+                          longitude = result.longitude;
+                          captureStatus = 'Ubicación adjuntada.';
+                          break;
+                        case LocationAvailability.denied:
+                          captureStatus = 'Permiso de ubicación denegado. Puedes intentarlo nuevamente.';
+                          break;
+                        case LocationAvailability.permanentlyDenied:
+                          captureStatus = 'Permiso de ubicación bloqueado permanentemente. Actívalo desde los ajustes del sistema.';
+                          settingsAction = () => _locationService.openAppSettings();
+                          break;
+                        case LocationAvailability.restricted:
+                          captureStatus = 'La ubicación está restringida en este dispositivo.';
+                          break;
+                        case LocationAvailability.serviceDisabled:
+                          captureStatus = 'El GPS del dispositivo está desactivado.';
+                          settingsAction = () => _locationService.openLocationSettings();
+                          break;
+                      }
+                    });
+                  },
+                ),
+                if (captureStatus != null) ...[
+                  const SizedBox(height: 8),
+                  Text(captureStatus!),
+                ],
+                if (settingsAction != null)
+                  TextButton(onPressed: settingsAction, child: const Text('Abrir ajustes')),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Guardar')),
+          ],
+        ),
+      ),
+    );
     if (created != true || _userId == null) return;
     final amount = double.tryParse(amountController.text.replaceAll(',', '.'));
     final description = descriptionController.text.trim();
@@ -241,7 +359,15 @@ class _HomeScreenState extends State<HomeScreen> {
       }
       return;
     }
-    await _repository.createOfflineExpense(userId: _userId!, amount: amount, description: description, date: date);
+    await _repository.createOfflineExpense(
+      userId: _userId!,
+      amount: amount,
+      description: description,
+      date: date,
+      receiptPhotoPath: photoPath,
+      latitude: latitude,
+      longitude: longitude,
+    );
     await _loadLocal();
     if (_online) {
       await _synchronize();

@@ -55,6 +55,8 @@ class ApiService {
       updatedAt: serverTimestamp,
       syncStatus: 'synced',
       lastSyncedAt: serverTimestamp,
+      latitude: (data['latitude'] as num?)?.toDouble(),
+      longitude: (data['longitude'] as num?)?.toDouble(),
     );
   }
 

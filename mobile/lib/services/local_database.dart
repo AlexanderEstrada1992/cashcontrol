@@ -3,7 +3,7 @@ import 'package:sqflite/sqflite.dart';
 
 class LocalDatabase {
   static const _databaseName = 'cashcontrol.db';
-  static const _databaseVersion = 2;
+  static const _databaseVersion = 3;
   Database? _database;
 
   Future<Database> get database async {
@@ -20,6 +20,11 @@ class LocalDatabase {
           await db.execute(
             'ALTER TABLE expenses ADD COLUMN last_synced_at TEXT',
           );
+        }
+        if (oldVersion < 3) {
+          await db.execute('ALTER TABLE expenses ADD COLUMN receipt_photo_path TEXT');
+          await db.execute('ALTER TABLE expenses ADD COLUMN latitude REAL');
+          await db.execute('ALTER TABLE expenses ADD COLUMN longitude REAL');
         }
       },
     );
@@ -40,7 +45,10 @@ class LocalDatabase {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         sync_status TEXT NOT NULL,
-        last_synced_at TEXT
+        last_synced_at TEXT,
+        receipt_photo_path TEXT,
+        latitude REAL,
+        longitude REAL
       )
     ''');
     await db.execute('''

@@ -77,6 +77,24 @@ class ExpenseCard extends StatelessWidget {
                           ],
                         ),
                       ],
+                      if (expense.hasReceiptPhoto || expense.hasLocation) ...[
+                        SizedBox(height: colors.spacingSm),
+                        Row(
+                          children: [
+                            if (expense.hasReceiptPhoto) ...[
+                              Icon(Icons.photo_camera_outlined, size: 16, color: colors.textSecondary),
+                              SizedBox(width: colors.spacingXs),
+                              Text('Foto', style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: colors.textSecondary)),
+                              SizedBox(width: colors.spacingMd),
+                            ],
+                            if (expense.hasLocation) ...[
+                              Icon(Icons.location_on_outlined, size: 16, color: colors.textSecondary),
+                              SizedBox(width: colors.spacingXs),
+                              Text('Ubicación', style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: colors.textSecondary)),
+                            ],
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                 ),

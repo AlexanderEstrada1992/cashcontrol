@@ -76,11 +76,21 @@ async function ensureExpensesTable(connection) {
         DESCRIPTION VARCHAR2(255) NOT NULL,
         EXPENSE_DATE TIMESTAMP NOT NULL,
         CREATED_AT TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
-        UPDATED_AT TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL
+        UPDATED_AT TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+        LATITUDE NUMBER(10,6),
+        LONGITUDE NUMBER(10,6)
       )
     `);
   } catch (error) {
     if (error.errorNum !== 955) throw error;
+    // Table already existed from a previous week: add the Week 14 location columns if missing.
+    for (const column of ['LATITUDE NUMBER(10,6)', 'LONGITUDE NUMBER(10,6)']) {
+      try {
+        await connection.execute(`ALTER TABLE CC_GASTOS_SYNC ADD (${column})`);
+      } catch (alterError) {
+        if (alterError.errorNum !== 1430) throw alterError;
+      }
+    }
   }
 }
 
@@ -94,7 +104,9 @@ function expenseFromRow(row) {
     description: row.DESCRIPTION,
     date: row.EXPENSE_DATE.toISOString(),
     created_at: row.CREATED_AT.toISOString(),
-    updated_at: row.UPDATED_AT.toISOString()
+    updated_at: row.UPDATED_AT.toISOString(),
+    latitude: row.LATITUDE ?? null,
+    longitude: row.LONGITUDE ?? null
   };
 }
 
@@ -124,11 +136,15 @@ app.get('/api/gastos', requireAuth, async (req, res) => {
 app.post('/api/gastos', requireAuth, async (req, res) => {
   let connection;
   const { client_operation_id: operationId, user_id: userId, category_id: categoryId,
-    amount, description, date, updated_at: updatedAt } = req.body;
-  if (userId !== req.userId || !operationId || !categoryId || typeof amount !== 'number' || amount <= 0 || !date || !updatedAt || !String(description || '').trim()) {
+    amount, description, date, updated_at: updatedAt, latitude, longitude } = req.body;
+  const hasInvalidLatitude = latitude !== undefined && latitude !== null && typeof latitude !== 'number';
+  const hasInvalidLongitude = longitude !== undefined && longitude !== null && typeof longitude !== 'number';
+  if (userId !== req.userId || !operationId || !categoryId || typeof amount !== 'number' || amount <= 0 || !date || !updatedAt || !String(description || '').trim() || hasInvalidLatitude || hasInvalidLongitude) {
     return res.status(422).json({ success: false, message: 'Error de validación', errors: {
       amount: typeof amount !== 'number' || amount <= 0 ? 'El monto debe ser mayor que 0' : undefined,
-      description: !String(description || '').trim() ? 'La descripción es obligatoria' : undefined
+      description: !String(description || '').trim() ? 'La descripción es obligatoria' : undefined,
+      latitude: hasInvalidLatitude ? 'La latitud debe ser numérica' : undefined,
+      longitude: hasInvalidLongitude ? 'La longitud debe ser numérica' : undefined
     } });
   }
   try {
@@ -148,14 +164,17 @@ app.post('/api/gastos', requireAuth, async (req, res) => {
         target.AMOUNT = :amount,
         target.DESCRIPTION = :description,
         target.EXPENSE_DATE = :expenseDate,
-        target.UPDATED_AT = :updatedAt
+        target.UPDATED_AT = :updatedAt,
+        target.LATITUDE = :latitude,
+        target.LONGITUDE = :longitude
         WHERE target.UPDATED_AT < :updatedAt
       WHEN NOT MATCHED THEN INSERT
-        (CLIENT_OPERATION_ID, USER_ID, CATEGORY_ID, AMOUNT, DESCRIPTION, EXPENSE_DATE, UPDATED_AT)
+        (CLIENT_OPERATION_ID, USER_ID, CATEGORY_ID, AMOUNT, DESCRIPTION, EXPENSE_DATE, UPDATED_AT, LATITUDE, LONGITUDE)
         VALUES (:operationId, :userId, :categoryId, :amount, :description,
-          :expenseDate, :updatedAt)
+          :expenseDate, :updatedAt, :latitude, :longitude)
     `, { operationId, userId: String(userId), categoryId: String(categoryId), amount,
-      description: description || '', expenseDate: new Date(date), updatedAt: new Date(updatedAt) }, { autoCommit: true });
+      description: description || '', expenseDate: new Date(date), updatedAt: new Date(updatedAt),
+      latitude: latitude ?? null, longitude: longitude ?? null }, { autoCommit: true });
     const result = await connection.execute(
       `SELECT * FROM CC_GASTOS_SYNC WHERE CLIENT_OPERATION_ID = :operationId`,
       { operationId }, { outFormat: oracledb.OUT_FORMAT_OBJECT }

@@ -17,6 +17,9 @@ class Expense {
     this.serverId,
     this.categoryId = 'general',
     this.lastSyncedAt,
+    this.receiptPhotoPath,
+    this.latitude,
+    this.longitude,
   });
 
   @JsonKey(defaultValue: '')
@@ -41,8 +44,14 @@ class Expense {
   final String syncStatus;
   @JsonKey(name: 'last_synced_at')
   final DateTime? lastSyncedAt;
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  final String? receiptPhotoPath;
+  final double? latitude;
+  final double? longitude;
 
   bool get isPending => syncStatus == 'pending' || syncStatus == 'failed';
+  bool get hasReceiptPhoto => receiptPhotoPath != null;
+  bool get hasLocation => latitude != null && longitude != null;
 
   factory Expense.fromJson(Map<String, dynamic> json) => _$ExpenseFromJson(json);
   Map<String, dynamic> toJson() => _$ExpenseToJson(this);
@@ -60,6 +69,9 @@ class Expense {
         'updated_at': updatedAt.toIso8601String(),
         'sync_status': syncStatus,
         'last_synced_at': lastSyncedAt?.toIso8601String(),
+        'receipt_photo_path': receiptPhotoPath,
+        'latitude': latitude,
+        'longitude': longitude,
       };
 
   factory Expense.fromMap(Map<String, Object?> map) => Expense(
@@ -77,6 +89,9 @@ class Expense {
         lastSyncedAt: map['last_synced_at'] == null
             ? null
             : DateTime.parse(map['last_synced_at']! as String),
+        receiptPhotoPath: map['receipt_photo_path'] as String?,
+        latitude: (map['latitude'] as num?)?.toDouble(),
+        longitude: (map['longitude'] as num?)?.toDouble(),
       );
 
   Map<String, Object?> toApiPayload() => {
@@ -87,5 +102,7 @@ class Expense {
         'description': description,
         'date': date.toIso8601String(),
         'updated_at': updatedAt.toIso8601String(),
+        if (latitude != null) 'latitude': latitude,
+        if (longitude != null) 'longitude': longitude,
       };
 }

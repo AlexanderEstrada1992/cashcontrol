@@ -56,6 +56,9 @@ class ExpenseRepository {
     required String description,
     required DateTime date,
     String categoryId = 'general',
+    String? receiptPhotoPath,
+    double? latitude,
+    double? longitude,
   }) async {
     final now = DateTime.now().toUtc();
     final operationId = '${userId}_${now.microsecondsSinceEpoch}';
@@ -70,6 +73,9 @@ class ExpenseRepository {
       createdAt: now,
       updatedAt: now,
       syncStatus: 'pending',
+      receiptPhotoPath: receiptPhotoPath,
+      latitude: latitude,
+      longitude: longitude,
     );
     return local.createPending(expense);
   }
@@ -92,9 +98,20 @@ class ExpenseRepository {
         final payload = jsonDecode(operation['payload']! as String) as Map<String, dynamic>;
         final remote = await api.createExpense(_expenseFromPayload(payload));
         await db.transaction((transaction) async {
+          final localRows = await transaction.query(
+            'expenses',
+            columns: ['receipt_photo_path'],
+            where: 'client_operation_id = ?',
+            whereArgs: [operationId],
+            limit: 1,
+          );
+          final remoteMap = remote.toMap();
+          if (localRows.isNotEmpty) {
+            remoteMap['receipt_photo_path'] = localRows.first['receipt_photo_path'];
+          }
           await transaction.insert(
             'expenses',
-            remote.toMap(),
+            remoteMap,
             conflictAlgorithm: ConflictAlgorithm.replace,
           );
           await transaction.delete(
@@ -143,6 +160,8 @@ class ExpenseRepository {
         createdAt: DateTime.parse(payload['updated_at'] as String),
         updatedAt: DateTime.parse(payload['updated_at'] as String),
         syncStatus: 'pending',
+        latitude: (payload['latitude'] as num?)?.toDouble(),
+        longitude: (payload['longitude'] as num?)?.toDouble(),
       );
 }
 

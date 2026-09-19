@@ -6,7 +6,9 @@ plugins {
 
 android {
     namespace = "com.example.mobile"
-    compileSdk = flutter.compileSdkVersion
+    // permission_handler_android requires compiling against SDK 37; compileSdk is
+    // backward compatible and does not change the app's targetSdk (Android 16 / API 36).
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
