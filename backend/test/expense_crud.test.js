@@ -150,6 +150,41 @@ async function exerciseCrud(t, realOracle) {
       assert.equal((await call('GET', `/api/gastos/${ids[0]}`, undefined, otherToken)).status, 404);
       assert.equal((await call('GET', '/api/gastos/abc')).status, 422);
     });
+    await t.test('lectura cacheada verifica JWT una sola vez y no abre conexiones', async () => {
+      const originalVerify = jwt.verify;
+      const originalGetConnection = oracledb.getConnection;
+      let verifications = 0;
+      let connections = 0;
+      jwt.verify = (...args) => { verifications++; return originalVerify(...args); };
+      oracledb.getConnection = (...args) => { connections++; return originalGetConnection(...args); };
+      try {
+        assert.equal((await call('GET', '/api/gastos')).status, 200);
+        assert.equal(verifications, 1);
+        assert.equal(connections, 0);
+      } finally {
+        jwt.verify = originalVerify;
+        oracledb.getConnection = originalGetConnection;
+      }
+    });
+    await t.test('exportación HTTP se ejecuta en worker y protege estado y archivo por usuario', async () => {
+      assert.equal((await call('POST', '/api/gastos/exportaciones', undefined, null)).status, 401);
+      const created = await call('POST', '/api/gastos/exportaciones');
+      assert.equal(created.status, 202);
+      const path = `/api/gastos/exportaciones/${created.body.data.job_id}`;
+      assert.equal((await call('GET', path, undefined, otherToken)).status, 404);
+      const deadline = Date.now() + 10000;
+      let job;
+      do {
+        job = await call('GET', path);
+        if (job.body.data.status === 'completed' || job.body.data.status === 'failed') break;
+      } while (Date.now() < deadline);
+      assert.equal(job.body.data.status, 'completed');
+      const csv = await fetch(`${baseUrl}${path}/archivo`, { headers: { Authorization: `Bearer ${token}` } });
+      assert.equal(csv.status, 200);
+      assert.match(csv.headers.get('content-type'), /text\/csv/);
+      assert.match(await csv.text(), /Prueba temporal CRUD/);
+      assert.equal((await call('GET', `${path}/archivo`, undefined, otherToken)).status, 404);
+    });
     await t.test('actualizar, rechazar inválidos y aislar usuario', async () => {
       const path = `/api/gastos/${ids[0]}`;
       assert.equal((await call('PUT', path, { ...body, amount: 0 })).status, 422);
@@ -159,6 +194,10 @@ async function exerciseCrud(t, realOracle) {
       assert.equal(updated.body.data.amount, 21);
       assert.equal(updated.body.data.client_operation_id, body.client_operation_id);
       assert.equal((await call('GET', path)).body.data.description, 'Gasto actualizado');
+      const list = await call('GET', '/api/gastos');
+      assert.equal(list.body.data.find(expense => expense.server_id === ids[0]).description, 'Gasto actualizado');
+      const page = await call('GET', '/api/gastos?page=1&limit=1');
+      assert.equal(page.body.data[0].amount, 21);
     });
     await t.test('eliminar y devolver 404 sin revelar otros usuarios', async () => {
       const path = `/api/gastos/${ids[0]}`;
@@ -166,6 +205,8 @@ async function exerciseCrud(t, realOracle) {
       assert.equal((await call('DELETE', path)).status, 200);
       assert.equal((await call('DELETE', path)).status, 404);
       assert.equal((await call('GET', path)).status, 404);
+      assert.equal((await call('GET', '/api/gastos')).body.data.length, 0);
+      assert.equal((await call('GET', '/api/gastos?page=1&limit=1')).body.pagination.total, 0);
     });
     if (!realOracle) {
       await t.test('fallo de persistencia devuelve JSON 500 sin detalles técnicos', async () => {

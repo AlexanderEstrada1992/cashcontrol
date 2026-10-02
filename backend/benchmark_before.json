@@ -1,0 +1,25 @@
+{
+  "label": "before",
+  "measuredAt": "2026-10-02T23:31:11.781Z",
+  "database": "Oracle real",
+  "completeList": {
+    "requests": 20,
+    "rows": 30,
+    "meanMs": 64.06,
+    "p95Ms": 71.92,
+    "firstMs": 65.86,
+    "executeCalls": 80,
+    "connections": 20,
+    "responseBytes": 9806
+  },
+  "paginatedList": {
+    "requests": 20,
+    "rows": 30,
+    "meanMs": 73.59,
+    "p95Ms": 94.01,
+    "firstMs": 72.49,
+    "executeCalls": 100,
+    "connections": 20,
+    "responseBytes": 3351
+  }
+}

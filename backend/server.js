@@ -6,6 +6,8 @@ const https = require('node:https');
 const fs = require('node:fs');
 const { AuthStore } = require('./auth_store');
 const { createAuth } = require('./auth_routes');
+const { ReadCache } = require('./read_cache');
+const { ExportQueue } = require('./export_queue');
 const { validateExpense, parsePagination, validExpenseId } = require('./expense_validation');
 
 const app = express();
@@ -32,7 +34,21 @@ const requireAuth = auth.requireAuth;
 app.use('/api', auth.router);
 app.use('/api/gastos', requireAuth, auth.requireRole('user', 'admin'));
 
+const expenseCache = new ReadCache();
+const exportQueue = new ExportQueue();
+app.locals.expenseCache = expenseCache;
+const expenseColumns = 'ID_GASTO, CLIENT_OPERATION_ID, USER_ID, CATEGORY_ID, AMOUNT, DESCRIPTION, EXPENSE_DATE, CREATED_AT, UPDATED_AT, LATITUDE, LONGITUDE';
+let expenseSchemaReady;
+
 async function ensureExpensesTable(connection) {
+  expenseSchemaReady ??= migrateExpensesTable(connection).catch(error => {
+    expenseSchemaReady = null;
+    throw error;
+  });
+  await expenseSchemaReady;
+}
+
+async function migrateExpensesTable(connection) {
   try {
     await connection.execute(`
       CREATE TABLE CC_GASTOS_SYNC (
@@ -78,46 +94,46 @@ function expenseFromRow(row) {
   };
 }
 
-app.get('/api/gastos', requireAuth, async (req, res) => {
+app.get('/api/gastos', async (req, res) => {
   const pagination = parsePagination(req.query);
   if (pagination === false) {
     return res.status(422).json({ success: false, message: 'Error de validación', errors: {
       pagination: 'page debe ser positivo y limit debe estar entre 1 y 100'
     } });
   }
-  let connection;
   try {
-    connection = await oracledb.getConnection({
-      user: process.env.DB_USER,
-      password: process.env.DB_PASSWORD,
-      connectString: process.env.DB_CONNECT_STRING
+    const key = JSON.stringify([req.userId, 'list', pagination?.page ?? null, pagination?.limit ?? null]);
+    const response = await expenseCache.get(key, req.userId, async () => {
+      const connection = await oracledb.getConnection({ user: process.env.DB_USER,
+        password: process.env.DB_PASSWORD, connectString: process.env.DB_CONNECT_STRING });
+      try {
+        await ensureExpensesTable(connection);
+        const result = await connection.execute(
+          `SELECT ${expenseColumns} FROM CC_GASTOS_SYNC WHERE USER_ID = :userId ORDER BY EXPENSE_DATE DESC, ID_GASTO DESC` +
+            (pagination ? ' OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY' : ''),
+          { userId: req.userId, ...(pagination ? { offset: pagination.offset, limit: pagination.limit } : {}) },
+          { outFormat: oracledb.OUT_FORMAT_OBJECT }
+        );
+        let metadata;
+        if (pagination) {
+          const count = await connection.execute(
+            'SELECT COUNT(*) AS TOTAL FROM CC_GASTOS_SYNC WHERE USER_ID = :userId',
+            { userId: req.userId }, { outFormat: oracledb.OUT_FORMAT_OBJECT }
+          );
+          const total = count.rows[0].TOTAL;
+          metadata = { page: pagination.page, limit: pagination.limit, total, pages: Math.ceil(total / pagination.limit) };
+        }
+        return { success: true, data: result.rows.map(expenseFromRow), ...(metadata ? { pagination: metadata } : {}) };
+      } finally { await connection.close(); }
     });
-    await ensureExpensesTable(connection);
-    const result = await connection.execute(
-      `SELECT * FROM CC_GASTOS_SYNC WHERE USER_ID = :userId ORDER BY EXPENSE_DATE DESC, ID_GASTO DESC` +
-        (pagination ? ' OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY' : ''),
-      { userId: req.userId, ...(pagination ? { offset: pagination.offset, limit: pagination.limit } : {}) },
-      { outFormat: oracledb.OUT_FORMAT_OBJECT }
-    );
-    let metadata;
-    if (pagination) {
-      const count = await connection.execute(
-        'SELECT COUNT(*) AS TOTAL FROM CC_GASTOS_SYNC WHERE USER_ID = :userId',
-        { userId: req.userId }, { outFormat: oracledb.OUT_FORMAT_OBJECT }
-      );
-      const total = count.rows[0].TOTAL;
-      metadata = { page: pagination.page, limit: pagination.limit, total, pages: Math.ceil(total / pagination.limit) };
-    }
-    res.json({ success: true, data: result.rows.map(expenseFromRow), ...(metadata ? { pagination: metadata } : {}) });
+    res.json(response);
   } catch (error) {
     console.error('Error al listar gastos:', error.message);
     res.status(500).json({ success: false, message: 'No fue posible listar los gastos' });
-  } finally {
-    if (connection) await connection.close();
   }
 });
 
-app.post('/api/gastos', requireAuth, async (req, res) => {
+app.post('/api/gastos', async (req, res) => {
   let connection;
   const { client_operation_id: operationId, user_id: userId, category_id: categoryId,
     amount, description, date, updated_at: updatedAt, latitude, longitude } = req.body || {};
@@ -159,8 +175,9 @@ app.post('/api/gastos', requireAuth, async (req, res) => {
     `, { operationId, userId: String(userId), categoryId: String(categoryId), amount,
       description: description || '', expenseDate: new Date(date), updatedAt: new Date(updatedAt),
       latitude: latitude ?? null, longitude: longitude ?? null }, { autoCommit: true });
+    expenseCache.invalidate(req.userId);
     const result = await connection.execute(
-      `SELECT * FROM CC_GASTOS_SYNC WHERE CLIENT_OPERATION_ID = :operationId AND USER_ID = :userId`,
+      `SELECT ${expenseColumns} FROM CC_GASTOS_SYNC WHERE CLIENT_OPERATION_ID = :operationId AND USER_ID = :userId`,
       { operationId, userId: req.userId }, { outFormat: oracledb.OUT_FORMAT_OBJECT }
     );
     res.status(existing.rows.length ? 200 : 201).json({ success: true, data: expenseFromRow(result.rows[0]) });
@@ -175,6 +192,39 @@ app.post('/api/gastos', requireAuth, async (req, res) => {
   }
 });
 
+app.post('/api/gastos/exportaciones', (req, res) => {
+  const id = exportQueue.submit(req.userId, async () => {
+    const connection = await oracledb.getConnection({ user: process.env.DB_USER,
+      password: process.env.DB_PASSWORD, connectString: process.env.DB_CONNECT_STRING });
+    try {
+      await ensureExpensesTable(connection);
+      const result = await connection.execute(
+        `SELECT ${expenseColumns} FROM CC_GASTOS_SYNC WHERE USER_ID = :userId
+          ORDER BY EXPENSE_DATE DESC, ID_GASTO DESC FETCH FIRST 5001 ROWS ONLY`,
+        { userId: req.userId }, { outFormat: oracledb.OUT_FORMAT_OBJECT }
+      );
+      if (result.rows.length > 5000) throw new Error('Máximo de exportación excedido');
+      return result.rows;
+    } finally { await connection.close(); }
+  });
+  if (!id) return res.status(429).json({ success: false, message: 'Cola de exportaciones llena. Intente más tarde.' });
+  res.location(`/api/gastos/exportaciones/${id}`).status(202).json({ success: true, data: { job_id: id, status: 'queued' } });
+});
+
+app.get('/api/gastos/exportaciones/:jobId', (req, res) => {
+  const job = exportQueue.get(req.params.jobId, req.userId);
+  if (!job) return res.status(404).json({ success: false, message: 'Exportación no encontrada o expirada' });
+  res.json({ success: true, data: { job_id: job.id, status: job.status, ...(job.message ? { message: job.message } : {}) } });
+});
+
+app.get('/api/gastos/exportaciones/:jobId/archivo', (req, res) => {
+  const job = exportQueue.get(req.params.jobId, req.userId);
+  if (!job) return res.status(404).json({ success: false, message: 'Exportación no encontrada o expirada' });
+  if (job.status !== 'completed') return res.status(409).json({ success: false, message: 'Exportación aún no disponible' });
+  res.set('Content-Disposition', 'attachment; filename="gastos.csv"');
+  res.type('text/csv').send(job.csv);
+});
+
 app.param('expenseId', (req, res, next, value) => {
   if (!validExpenseId(value)) {
     return res.status(422).json({ success: false, message: 'Error de validación', errors: { expenseId: 'ID inválido' } });
@@ -182,13 +232,13 @@ app.param('expenseId', (req, res, next, value) => {
   next();
 });
 
-app.get('/api/gastos/:expenseId', requireAuth, async (req, res) => {
+app.get('/api/gastos/:expenseId', async (req, res) => {
   let connection;
   try {
     connection = await oracledb.getConnection({ user: process.env.DB_USER, password: process.env.DB_PASSWORD, connectString: process.env.DB_CONNECT_STRING });
     await ensureExpensesTable(connection);
     const result = await connection.execute(
-      'SELECT * FROM CC_GASTOS_SYNC WHERE ID_GASTO = :expenseId AND USER_ID = :userId',
+      `SELECT ${expenseColumns} FROM CC_GASTOS_SYNC WHERE ID_GASTO = :expenseId AND USER_ID = :userId`,
       { expenseId: Number(req.params.expenseId), userId: req.userId }, { outFormat: oracledb.OUT_FORMAT_OBJECT }
     );
     if (!result.rows.length) return res.status(404).json({ success: false, message: 'Gasto no encontrado' });
@@ -200,7 +250,7 @@ app.get('/api/gastos/:expenseId', requireAuth, async (req, res) => {
   }
 });
 
-app.put('/api/gastos/:expenseId', requireAuth, async (req, res) => {
+app.put('/api/gastos/:expenseId', async (req, res) => {
   const errors = validateExpense(req.body, { create: false, userId: req.userId });
   if (Object.keys(errors).length) return res.status(422).json({ success: false, message: 'Error de validación', errors });
   let connection;
@@ -217,10 +267,11 @@ app.put('/api/gastos/:expenseId', requireAuth, async (req, res) => {
     );
     if (!result.rowsAffected) return res.status(404).json({ success: false, message: 'Gasto no encontrado' });
     const updated = await connection.execute(
-      'SELECT * FROM CC_GASTOS_SYNC WHERE ID_GASTO = :expenseId AND USER_ID = :userId',
+      `SELECT ${expenseColumns} FROM CC_GASTOS_SYNC WHERE ID_GASTO = :expenseId AND USER_ID = :userId`,
       { expenseId: Number(req.params.expenseId), userId: req.userId }, { outFormat: oracledb.OUT_FORMAT_OBJECT }
     );
     await connection.commit();
+    expenseCache.invalidate(req.userId);
     res.json({ success: true, data: expenseFromRow(updated.rows[0]) });
   } catch (_) {
     res.status(500).json({ success: false, message: 'No fue posible actualizar el gasto' });
@@ -229,7 +280,7 @@ app.put('/api/gastos/:expenseId', requireAuth, async (req, res) => {
   }
 });
 
-app.delete('/api/gastos/:expenseId', requireAuth, async (req, res) => {
+app.delete('/api/gastos/:expenseId', async (req, res) => {
   let connection;
   try {
     connection = await oracledb.getConnection({ user: process.env.DB_USER, password: process.env.DB_PASSWORD, connectString: process.env.DB_CONNECT_STRING });
@@ -239,6 +290,7 @@ app.delete('/api/gastos/:expenseId', requireAuth, async (req, res) => {
       { expenseId: Number(req.params.expenseId), userId: req.userId }, { autoCommit: true }
     );
     if (!result.rowsAffected) return res.status(404).json({ success: false, message: 'Gasto no encontrado' });
+    expenseCache.invalidate(req.userId);
     res.json({ success: true, data: { server_id: Number(req.params.expenseId) }, message: 'Gasto eliminado' });
   } catch (_) {
     res.status(500).json({ success: false, message: 'No fue posible eliminar el gasto' });

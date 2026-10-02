@@ -2,6 +2,109 @@
 
 CashControl es una aplicación móvil multiplataforma orientada a la gestión de finanzas personales. Su objetivo es permitir que los usuarios puedan registrar y controlar ingresos, gastos y presupuestos mediante una aplicación móvil conectada a un backend propio y una base de datos relacional.
 
+## Semana 8 – Optimización medida del backend
+
+Se midieron y optimizaron las lecturas de `/api/gastos` manteniendo el contrato
+de Flutter, autenticación, Oracle y sincronización offline. La medición inicial
+detectó tres intentos DDL por solicitud sobre una tabla existente (CREATE y dos
+ALTER), conexiones repetidas para lecturas idénticas y doble verificación JWT.
+
+### Resultados antes y después
+
+Entorno: Oracle real local, 30 gastos temporales de un usuario de prueba aislado,
+20 solicitudes HTTP secuenciales para cada modalidad. Se incluye la primera lectura
+en el promedio. Los registros se eliminan al terminar; no se guardan tokens.
+
+| Métrica | Antes | Después |
+| --- | --- | --- |
+| Listado completo: promedio | 64,06 ms | 12,84 ms |
+| Listado completo: p95 | 71,92 ms | 22,73 ms |
+| Listado completo: sentencias execute / 20 solicitudes | 80 | 1 |
+| Listado completo: conexiones / 20 solicitudes | 20 | 1 |
+| Listado paginado: promedio | 73,59 ms | 16,85 ms |
+| Listado paginado: p95 | 94,01 ms | 24,98 ms |
+| Listado paginado: sentencias execute / 20 solicitudes | 100 | 2 |
+| Listado paginado: conexiones / 20 solicitudes | 20 | 1 |
+
+La mejora del promedio fue aproximadamente 80% y 77% respectivamente en este
+escenario de lecturas repetidas dentro del TTL, no una garantía para toda carga.
+La primera lectura completa fue 65,86 ms antes y 66,14 ms después: la conexión
+fría conserva un coste similar. Las cifras `execute` incluyen DDL, no solo SELECT.
+No se afirma reducción de tamaño por caché: el contrato conserva los campos.
+La paginación reduce el JSON de unos 9,8 KB (30 gastos) a 3,4 KB (10 gastos);
+pequeñas diferencias entre muestras provienen de IDs y fechas de los datos temporales.
+
+Evidencias reproducibles: `backend/benchmark_before.json`,
+`backend/benchmark_after.json` y `backend/scripts/benchmark_expenses.js`.
+
+```powershell
+node backend/scripts/benchmark_expenses.js measurement
+```
+
+Para reproducir exactamente el antes, usar una copia del commit `c681c77` con el
+script de benchmark actual; no es necesario revertir el proyecto de trabajo.
+
+### Técnicas aplicadas
+
+- **Inicialización única:** la creación/migración de gastos se realiza en el primer
+   uso y se comparte entre solicitudes; si falla, un uso posterior puede reintentar.
+- **Cache-aside:** lecturas por usuario y página, TTL de 5 segundos, máximo 128
+   entradas y 16 MiB globales; una respuesta mayor a 2 MiB no se cachea. Lecturas
+   concurrentes de la misma clave comparten la carga. No se cachean errores ni tokens.
+- **Invalidación:** POST, PUT y DELETE invalidan las páginas del propietario después
+   de persistir el cambio. Una lectura iniciada antes del cambio no repuebla la caché
+   invalidada. JWT y rol se verifican incluso cuando se devuelve una respuesta cacheada.
+- **Autenticación:** se elimina la doble verificación de JWT en rutas de gastos.
+   Una lectura cacheada hace una verificación y cero conexiones a Oracle, comprobado
+   por pruebas. Login/refresh conservan las consultas necesarias para validar la sesión.
+- **Selección de campos:** consultas de gastos proyectan explícitamente los campos
+   del contrato, en lugar de SELECT *, preservando los metadatos y coordenadas.
+- **Paginación:** se mantiene page/limit con máximo de 100; el listado sin parámetros
+   sigue siendo completo por compatibilidad con la sincronización móvil actual.
+
+### N+1 y estrategia de carga
+
+No se encontró una consulta N+1 en el listado: los gastos llegan en una sola
+consulta de datos y se serializan sin acceder de nuevo a Oracle por fila. La
+consulta adicional de COUNT para paginación es constante, no depende del número
+de registros y no es un N+1. No se añadió una relación o un ORM artificial para
+simular ese problema. Se conserva carga agrupada del conjunto de gastos solicitado
+y lectura del detalle bajo demanda; no se cargan perfiles de usuario por gasto.
+Si posteriormente se muestran categorías o relaciones, deben obtenerse mediante
+JOIN o consulta agrupada, no mediante una consulta por tarjeta.
+
+### Cola de exportación CSV y worker
+
+Se añadió una exportación real de gastos como operación asíncrona de backend:
+
+| Método y ruta | Propósito |
+| --- | --- |
+| `POST /api/gastos/exportaciones` | Aceptar trabajo (`202`) y devolver job_id y Location |
+| `GET /api/gastos/exportaciones/:jobId` | Consultar queued/running/completed/failed |
+| `GET /api/gastos/exportaciones/:jobId/archivo` | Descargar CSV completado del mismo usuario |
+
+La consulta de Oracle es asíncrona y acotada; el formateo y escape del CSV se
+ejecutan en `worker_threads`, fuera del hilo principal. Máximo 10 trabajos retenidos,
+2 concurrentes, 5000 gastos y 5 MiB por archivo. Un worker que no termina en
+30 segundos se detiene. Se neutralizan fórmulas de hoja de cálculo en textos.
+La exportación es nueva: no se atribuye a ella un cuello de botella previo
+inexistente. Esta cola no reemplaza `pending_operations` ni exporta credenciales.
+
+### Límites y verificación
+
+Caché y cola son locales a un proceso: no hay Redis ni cola durable. Tras reiniciar,
+los trabajos se pierden; los resultados expiran cinco minutos después de terminar.
+En varias instancias se necesita invalidación distribuida y trabajos compartidos.
+Cambios realizados directamente en Oracle o desde otro proceso pueden tardar hasta
+cinco segundos en reflejarse en lecturas cacheadas. No se cachea HTTP en el teléfono
+(`Cache-Control: no-store` se mantiene). La exportación aún no tiene un botón en Flutter.
+
+Se probaron TTL, memoria acotada, invalidación concurrente, aislamiento entre usuarios,
+JWT único, CRUD/auth existentes y exportación HTTP/worker contra Oracle real.
+GitHub Copilot asistió en la inspección y optimización; las decisiones se contrastaron
+con conteos instrumentados, métricas HTTP y pruebas automatizadas, sin inventar N+1
+ni resultados. No se modificaron las pantallas, permisos nativos ni SQLite.
+
 ## Semana 7 – Autenticación, roles y seguridad
 
 El backend deja de comparar contraseñas en texto plano o depender de un único

@@ -70,6 +70,31 @@
         "409": { "$ref": "#/components/responses/Conflict" }, "422": { "$ref": "#/components/responses/Validation" },
         "500": { "$ref": "#/components/responses/ServerError" } } }
     },
+    "/api/gastos/exportaciones": {
+      "post": { "summary": "Encolar exportación CSV de gastos propios", "description": "Hasta 5000 gastos; cola en memoria de 10 trabajos, 2 concurrentes. No modifica la cola offline de Flutter.",
+        "responses": { "202": { "description": "Trabajo aceptado; Location indica la ruta de estado", "content": { "application/json": { "schema": {
+          "type": "object", "properties": { "success": { "type": "boolean" }, "data": { "$ref": "#/components/schemas/ExportJob" } }
+        } } } }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" },
+          "429": { "description": "Cola llena. Intente nuevamente más tarde." } }
+      }
+    },
+    "/api/gastos/exportaciones/{jobId}": {
+      "parameters": [{ "name": "jobId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+      "get": { "summary": "Estado de una exportación propia", "description": "Los resultados expiran 5 minutos después de completar o fallar; se pierden al reiniciar el proceso.",
+        "responses": { "200": { "description": "Estado del trabajo", "content": { "application/json": { "schema": {
+          "type": "object", "properties": { "success": { "type": "boolean" }, "data": { "$ref": "#/components/schemas/ExportJob" } }
+        } } } }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" } }
+      }
+    },
+    "/api/gastos/exportaciones/{jobId}/archivo": {
+      "parameters": [{ "name": "jobId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+      "get": { "summary": "Descargar CSV de una exportación propia completada", "responses": {
+        "200": { "description": "Archivo gastos.csv, hasta 5 MiB", "content": { "text/csv": { "schema": { "type": "string" } } } },
+        "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" },
+        "404": { "$ref": "#/components/responses/NotFound" }, "409": { "description": "Trabajo pendiente o fallido; archivo no disponible" }
+      } }
+    },
     "/api/gastos/{expenseId}": {
       "parameters": [{ "name": "expenseId", "in": "path", "required": true, "schema": { "type": "integer", "minimum": 1 } }],
       "get": { "summary": "Consultar gasto propio por server_id", "responses": { "200": { "$ref": "#/components/responses/Expense" },
@@ -89,6 +114,8 @@
   "components": {
     "securitySchemes": { "bearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "JWT" } },
     "schemas": {
+      "ExportJob": { "type": "object", "properties": { "job_id": { "type": "string", "format": "uuid" },
+        "status": { "type": "string", "enum": ["queued", "running", "completed", "failed"] }, "message": { "type": "string" } } },
       "Login": { "type": "object", "required": ["username", "password"], "properties": {
         "username": { "type": "string", "minLength": 3, "maxLength": 100, "pattern": "^[a-zA-Z0-9._-]+$" },
         "password": { "type": "string", "minLength": 1, "maxLength": 128, "writeOnly": true }
