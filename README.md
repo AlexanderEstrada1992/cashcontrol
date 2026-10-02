@@ -2,6 +2,110 @@
 
 CashControl es una aplicación móvil multiplataforma orientada a la gestión de finanzas personales. Su objetivo es permitir que los usuarios puedan registrar y controlar ingresos, gastos y presupuestos mediante una aplicación móvil conectada a un backend propio y una base de datos relacional.
 
+## Semana 7 – Autenticación, roles y seguridad
+
+El backend deja de comparar contraseñas en texto plano o depender de un único
+usuario fijo. `CC_USERS` en Oracle persiste usuarios, correo (único), hash scrypt,
+rol (`user` o `admin`) y estado activo. `CC_REFRESH_SESSIONS` persiste únicamente
+el hash SHA-256 y vencimiento del refresh token, con una relación al usuario.
+No se altera la tabla de gastos ni la cola offline.
+
+### Recursos y permisos
+
+| Ruta | Acceso | Propósito |
+| --- | --- | --- |
+| `GET /api/health` | Público | Salud de API y Oracle |
+| `GET /api/openapi.json` | Público | Contrato OpenAPI 3.0.3, importable en Swagger/Postman |
+| `POST /api/auth/register` | Público | Registro de usuario con correo y contraseña; solo rol `user` |
+| `POST /api/auth/login` | Público | Verificación de contraseña y emisión de tokens |
+| `POST /api/auth/refresh` | Público, exige refresh válido | Renovación con rotación de sesión |
+| `GET /api/auth/me` | `user`, `admin` | Perfil público de la sesión |
+| `/api/gastos` y `/api/gastos/:expenseId` | `user`, `admin` y propiedad del recurso | CRUD de los gastos propios; tampoco admin accede a gastos ajenos |
+| `GET /api/admin/users` | Solo `admin` | Listado limitado de ID, usuario y rol; sin credenciales |
+
+La aplicación móvil consume login, refresh, listado y creación con el contrato
+existente `userId`, `accessToken`, `refreshToken`. Se elimina la contraseña
+precargada del formulario Flutter; debe introducirla el usuario. Registro, perfil
+y administración están implementados y probados en la API; no se agregan pantallas
+móviles nuevas en esta semana del backend.
+
+### Validaciones y tokens
+
+Registro exige usuario de 3 a 100 caracteres (letras, números, punto, guion o
+guion bajo), correo válido de hasta 254 caracteres y contraseña de 12 a 128.
+El login permite las contraseñas existentes para preservar la cuenta de desarrollo.
+Los nombres y correos se normalizan a minúsculas para aplicar unicidad.
+El registro público no permite escoger el rol admin.
+
+JWT contiene únicamente `sub`, `role`, tipo, fechas y metadatos de verificación
+(`iss`, `aud`; refresh incluye `jti`). Se exige HS256, emisor y audiencia conocidos.
+La vigencia por defecto es 15 minutos para acceso y 7 días para refresh; en
+desarrollo se conserva `ACCESS_TOKEN_TTL=1m` cuando está configurado para demostrar
+la expiración. Cada refresh válido se consume atómicamente y se reemplaza por otro:
+la reutilización y dos intentos concurrentes no producen dos sesiones nuevas.
+Si el usuario ya no está activo, no puede iniciar ni renovar sesión. El token de
+acceso ya emitido sigue siendo válido hasta expirar; no se implementa blacklist.
+
+Se devuelve `401` ante credenciales/token ausente, inválido o vencido; `403` ante
+rol insuficiente; `404` para recursos ajenos sin revelar su existencia; `409` para
+duplicados; `422` para campos inválidos; `429` ante demasiados intentos de autenticación
+y `500` sin detalles internos. Se limita el cuerpo JSON y no se registran tokens,
+contraseñas ni encabezados Authorization.
+
+### Configuración y HTTPS
+
+El secreto JWT debe ser aleatorio, con al menos 32 bytes y fuera de Git. El backend
+carga su propio `.env`, independientemente del directorio desde el que se ejecute.
+Para migrar las credenciales de desarrollo existentes sin imprimirlas:
+
+```powershell
+node backend/scripts/migrate_auth_env.js
+```
+
+La utilidad convierte `AUTH_PASSWORD` en `AUTH_PASSWORD_HASH` y elimina el valor
+en texto plano; también reemplaza el antiguo secreto de ejemplo si sigue presente.
+El hash permite inicializar el usuario de desarrollo conservando su ID y gastos.
+No se sobrescriben cuentas persistidas si ya existen. Un administrador debe
+provisionarse fuera del registro público, mediante `AUTH_ADMIN_USER` y
+`AUTH_ADMIN_PASSWORD_HASH` (o configuración controlada por el administrador de Oracle).
+No hay contraseñas de administrador por defecto.
+
+En producción `NODE_ENV=production` exige `HTTPS_CERT_FILE` y `HTTPS_KEY_FILE`.
+Node utiliza `https.createServer` con esos archivos; si faltan, el servidor no inicia
+en HTTP. En desarrollo se conserva HTTP local y el túnel USB. Certificados y claves
+deben guardarse fuera del repositorio. El despliegue TLS con certificado real requiere
+el certificado de la infraestructura y no se considera probado por la prueba local.
+
+### Riesgos y medidas
+
+- Exposición de credenciales: hashes scrypt con sal aleatoria, comparación resistente
+   a diferencias temporales, secretos de entorno, ausencia de contraseñas en Flutter.
+- Escalamiento de privilegios/acceso ajeno: rol del JWT firmado, guardia administrativa,
+   registro limitado a user y SQL filtrado por propietario.
+- Inyección SQL: consultas con variables bind para los datos recibidos.
+- Reutilización de refresh: almacenamiento de hashes y rotación atómica de un solo uso.
+- Fuerza bruta: límite básico por IP (20 intentos/minuto); es local al proceso y para
+   varias instancias se debe sustituir por un limitador distribuido.
+
+### Verificación
+
+```powershell
+cd backend
+npm test
+$env:RUN_ORACLE_TESTS='1'
+npm test
+Remove-Item Env:RUN_ORACLE_TESTS
+node --check server.js
+```
+
+Las pruebas cubren registro/login/refresh con Oracle y almacén simulado, duplicados,
+validaciones, roles insuficientes, tokens ausentes/vencidos/de tipo incorrecto,
+rotación y concurrencia; la suite CRUD sigue comprobando recursos de otros usuarios
+y limpieza de registros temporales. También se comprueban referencias OpenAPI y
+que producción rechace iniciar HTTP sin certificados. No se imprimen credenciales.
+GitHub Copilot asistió en implementación y pruebas; los resultados se contrastaron
+con el contrato HTTP y Oracle real, no solo con código generado.
+
 ## Semana 6 – CRUD de gastos en el backend
 
 La entidad principal es el gasto, persistido en Oracle 19c en `CC_GASTOS_SYNC`.

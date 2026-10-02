@@ -64,7 +64,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _authStatus;
   bool _loggingIn = false;
   final _usernameController = TextEditingController(text: 'demo-user');
-  final _passwordController = TextEditingController(text: 'demo-password');
+  final _passwordController = TextEditingController();
   Map<String, String> _loginFieldErrors = const {};
   String? _error;
 

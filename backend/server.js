@@ -1,69 +1,36 @@
-require('dotenv').config();
+require('dotenv').config({ path: require('node:path').join(__dirname, '.env'), quiet: true });
 
 const express = require('express');
 const oracledb = require('oracledb');
-const jwt = require('jsonwebtoken');
+const https = require('node:https');
+const fs = require('node:fs');
+const { AuthStore } = require('./auth_store');
+const { createAuth } = require('./auth_routes');
 const { validateExpense, parsePagination, validExpenseId } = require('./expense_validation');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET;
-const ACCESS_TOKEN_TTL = process.env.ACCESS_TOKEN_TTL || '2m';
+const ACCESS_TOKEN_TTL = process.env.ACCESS_TOKEN_TTL || '15m';
 const REFRESH_TOKEN_TTL = process.env.REFRESH_TOKEN_TTL || '7d';
-const AUTH_USER = process.env.AUTH_USER || 'demo-user';
-const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'demo-password';
 
-if (!JWT_SECRET) {
-  throw new Error('JWT_SECRET debe configurarse en backend/.env');
+if (!JWT_SECRET || Buffer.byteLength(JWT_SECRET) < 32) {
+  throw new Error('JWT_SECRET debe configurarse con al menos 32 bytes en backend/.env');
 }
 
-app.use(express.json());
-
-function issueTokens(userId) {
-  return {
-    accessToken: jwt.sign({ sub: userId, type: 'access' }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_TTL }),
-    refreshToken: jwt.sign({ sub: userId, type: 'refresh' }, JWT_SECRET, { expiresIn: REFRESH_TOKEN_TTL })
-  };
-}
-
-function requireAuth(req, res, next) {
-  const header = req.get('Authorization') || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
-  if (!token) return res.status(401).json({ success: false, message: 'Sesión no autorizada' });
-  try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    if (payload.type !== 'access') throw new Error('Tipo de token inválido');
-    req.userId = String(payload.sub);
-    next();
-  } catch (_) {
-    return res.status(401).json({ success: false, message: 'Sesión expirada' });
-  }
-}
-
-app.post('/api/auth/login', (req, res) => {
-  const { username, password } = req.body || {};
-  if (!username || !password) {
-    return res.status(422).json({ success: false, message: 'Error de validación', errors: {
-      username: 'El usuario es obligatorio', password: 'La contraseña es obligatoria'
-    } });
-  }
-  if (username !== AUTH_USER || password !== AUTH_PASSWORD) {
-    return res.status(401).json({ success: false, message: 'Credenciales inválidas' });
-  }
-  return res.json({ success: true, userId: AUTH_USER, ...issueTokens(AUTH_USER) });
+app.disable('x-powered-by');
+app.use(express.json({ limit: '32kb' }));
+app.use((req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  res.set('X-Content-Type-Options', 'nosniff');
+  next();
 });
-
-app.post('/api/auth/refresh', (req, res) => {
-  const { refreshToken } = req.body || {};
-  if (!refreshToken) return res.status(401).json({ success: false, message: 'Refresh token requerido' });
-  try {
-    const payload = jwt.verify(refreshToken, JWT_SECRET);
-    if (payload.type !== 'refresh') throw new Error('Tipo de token inválido');
-    return res.json({ success: true, userId: String(payload.sub), ...issueTokens(String(payload.sub)) });
-  } catch (_) {
-    return res.status(401).json({ success: false, message: 'Refresh token inválido o expirado' });
-  }
-});
+app.get('/api/openapi.json', (req, res) => res.json(require('./openapi.json')));
+const auth = createAuth({ store: new AuthStore(), secret: JWT_SECRET,
+  accessTtl: ACCESS_TOKEN_TTL, refreshTtl: REFRESH_TOKEN_TTL });
+const requireAuth = auth.requireAuth;
+app.use('/api', auth.router);
+app.use('/api/gastos', requireAuth, auth.requireRole('user', 'admin'));
 
 async function ensureExpensesTable(connection) {
   try {
@@ -325,8 +292,15 @@ app.use((error, req, res, next) => {
 });
 
 if (require.main === module) {
-  app.listen(PORT, () => {
-    console.log(`Servidor CashControl ejecutándose en http://localhost:${PORT}`);
+  const certificate = process.env.HTTPS_CERT_FILE;
+  const key = process.env.HTTPS_KEY_FILE;
+  if (process.env.NODE_ENV === 'production' && (!certificate || !key)) {
+    throw new Error('Producción requiere HTTPS_CERT_FILE y HTTPS_KEY_FILE');
+  }
+  if (!!certificate !== !!key) throw new Error('Configure ambas rutas de certificado y clave TLS');
+  const server = certificate ? https.createServer({ cert: fs.readFileSync(certificate), key: fs.readFileSync(key) }, app) : app;
+  server.listen(PORT, () => {
+    console.log(`Servidor CashControl ejecutándose en ${certificate ? 'https' : 'http'}://localhost:${PORT}`);
   });
 }
 

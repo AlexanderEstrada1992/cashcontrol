@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { randomBytes } = require('node:crypto');
 const oracledb = require('oracledb');
 const jwt = require('jsonwebtoken');
+const { tokenOptions } = require('../auth_routes');
 const { validateExpense, parsePagination } = require('../expense_validation');
 
 process.env.JWT_SECRET ||= randomBytes(32).toString('hex');
@@ -97,8 +98,10 @@ async function exerciseCrud(t, realOracle) {
   const server = app.listen(0, '127.0.0.1');
   await new Promise(resolve => server.once('listening', resolve));
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
-  const token = jwt.sign({ sub: 'crud-test-user', type: 'access' }, process.env.JWT_SECRET, { expiresIn: '5m' });
-  const otherToken = jwt.sign({ sub: 'crud-test-other', type: 'access' }, process.env.JWT_SECRET, { expiresIn: '5m' });
+  const token = jwt.sign({ sub: 'crud-test-user', role: 'user', type: 'access' }, process.env.JWT_SECRET,
+    { ...tokenOptions, expiresIn: '5m' });
+  const otherToken = jwt.sign({ sub: 'crud-test-other', role: 'user', type: 'access' }, process.env.JWT_SECRET,
+    { ...tokenOptions, expiresIn: '5m' });
   const ids = [];
   const call = async (method, path, body, auth = token, raw = false) => {
     const response = await fetch(`${baseUrl}${path}`, {
