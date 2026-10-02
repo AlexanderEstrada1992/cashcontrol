@@ -2,6 +2,90 @@
 
 CashControl es una aplicación móvil multiplataforma orientada a la gestión de finanzas personales. Su objetivo es permitir que los usuarios puedan registrar y controlar ingresos, gastos y presupuestos mediante una aplicación móvil conectada a un backend propio y una base de datos relacional.
 
+## Semana 6 – CRUD de gastos en el backend
+
+La entidad principal es el gasto, persistido en Oracle 19c en `CC_GASTOS_SYNC`.
+Se conserva el contrato utilizado por Flutter, los tokens JWT y el identificador
+`client_operation_id` de la cola offline. No se reemplaza la arquitectura existente.
+
+| Método y ruta | Función | Resultado |
+| --- | --- | --- |
+| `POST /api/gastos` | Crear o sincronizar idempotentemente | `201` al crear; `200` al repetir una operación existente |
+| `GET /api/gastos` | Listado completo compatible con la sincronización actual | `200`, `{ success: true, data: [...] }` |
+| `GET /api/gastos?page=1&limit=20` | Listado paginado (máximo 100 por página) | `200`, con `pagination: { page, limit, total, pages }` |
+| `GET /api/gastos/:expenseId` | Consultar por `server_id` | `200` o `404` |
+| `PUT /api/gastos/:expenseId` | Reemplazar los campos editables | `200` o `404` |
+| `DELETE /api/gastos/:expenseId` | Eliminación física del registro remoto | `200`; `404` si no existe |
+
+Todos los endpoints de gastos requieren Bearer y filtran por el usuario del JWT.
+`GET /api/health` sigue siendo público y comprueba la conexión real con Oracle.
+
+### Validaciones y reglas de negocio
+
+- Monto numérico finito, positivo, con hasta dos decimales y compatible con `NUMBER(12,2)`.
+- Descripción obligatoria de hasta 255 caracteres; categoría de hasta 100 caracteres.
+- Identificador de operación y usuario obligatorios de hasta 100 caracteres en creación.
+- Fechas en formato ISO UTC válido, igual al enviado por Flutter (`DateTime.toIso8601String`).
+- Latitud y longitud opcionales, enviadas juntas y dentro de sus rangos geográficos.
+- Un usuario solo puede consultar o modificar sus propios gastos.
+- Repetir `client_operation_id` para el mismo usuario mantiene un único registro y el esquema Last Write Wins existente.
+- Un identificador perteneciente a otro usuario produce `409`, sin permitir apropiarse del registro.
+
+`PUT` recibe `category_id`, `amount`, `description`, `date` y coordenadas opcionales.
+No modifica el identificador del gasto, su propietario ni su identificador de operación.
+La fecha de actualización de `PUT` procede del servidor. No se implementa `PATCH`
+porque el reemplazo completo de los campos editables basta para este alcance.
+
+### Respuestas y seguridad
+
+Las respuestas conservan `success` y `data`; los errores usan
+`{ success: false, message, errors? }`. Se devuelve `400` para JSON malformado,
+`401` para sesión inválida, `404` para recursos inexistentes o ajenos,
+`409` para conflictos de unicidad, `422` para validación y `500` para fallos internos.
+No se envían trazas ni detalles de Oracle al cliente.
+
+Se mitigan la inyección SQL con variables bind y el acceso a datos ajenos con
+filtros por `USER_ID` derivados del JWT, no de la URL. La paginación limita
+el tamaño de consultas solicitadas. Como optimización futura se propone un índice
+compuesto sobre `(USER_ID, EXPENSE_DATE, ID_GASTO)` para listado y ordenación;
+debe evaluarse con el plan de ejecución antes de añadirlo.
+
+### Consumo móvil y eliminación
+
+Actualmente `HomeScreen` consume listado y creación a través de `ExpenseRepository`
+y `ApiService`; la cola local sigue utilizando `POST` con idempotencia.
+Detalle, `PUT` y `DELETE` están disponibles y probados en la API, pero no se han
+añadido pantallas ni controles móviles para ellos en esta semana del backend.
+
+Se eligió eliminación física para el CRUD del prototipo sin introducir tombstones
+ni cambiar el contrato de sincronización. Una eliminación remota no elimina la
+copia SQLite automáticamente; las pruebas usan registros temporales de un usuario
+separado. Antes de exponer eliminación desde Flutter se debe implementar su
+reconciliación local/remota y evitar que una operación pendiente recree el gasto.
+
+### Pruebas y evidencia técnica
+
+```powershell
+cd backend
+npm test
+$env:RUN_ORACLE_TESTS='1'
+npm test
+Remove-Item Env:RUN_ORACLE_TESTS
+node --check server.js
+```
+
+La suite `test/expense_crud.test.js` verifica validaciones y el contrato HTTP
+con persistencia simulada. La segunda ejecución comprueba el mismo CRUD contra
+Oracle real, crea registros temporales de `crud-test-user` y los elimina al finalizar.
+Se verifican creación, repetición idempotente, conflicto entre usuarios, listado,
+paginación, detalle, actualización, eliminación, recursos inexistentes y solicitudes
+no autorizadas. Los fallos internos se verifican con persistencia simulada.
+No se imprimen JWT ni credenciales en las evidencias de estas pruebas.
+
+GitHub Copilot asistió en la inspección del contrato, validaciones, endpoints y
+pruebas. Los cambios se verificaron con pruebas HTTP automatizadas y persistencia
+real en Oracle; no se consideran verificados por generación de código solamente.
+
 ## Arquitectura actual
 
 La solución está organizada de la siguiente manera:

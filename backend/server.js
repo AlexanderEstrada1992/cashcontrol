@@ -3,6 +3,7 @@ require('dotenv').config();
 const express = require('express');
 const oracledb = require('oracledb');
 const jwt = require('jsonwebtoken');
+const { validateExpense, parsePagination, validExpenseId } = require('./expense_validation');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -111,6 +112,12 @@ function expenseFromRow(row) {
 }
 
 app.get('/api/gastos', requireAuth, async (req, res) => {
+  const pagination = parsePagination(req.query);
+  if (pagination === false) {
+    return res.status(422).json({ success: false, message: 'Error de validación', errors: {
+      pagination: 'page debe ser positivo y limit debe estar entre 1 y 100'
+    } });
+  }
   let connection;
   try {
     connection = await oracledb.getConnection({
@@ -120,11 +127,21 @@ app.get('/api/gastos', requireAuth, async (req, res) => {
     });
     await ensureExpensesTable(connection);
     const result = await connection.execute(
-      `SELECT * FROM CC_GASTOS_SYNC WHERE USER_ID = :userId ORDER BY EXPENSE_DATE DESC`,
-      { userId: req.userId },
+      `SELECT * FROM CC_GASTOS_SYNC WHERE USER_ID = :userId ORDER BY EXPENSE_DATE DESC, ID_GASTO DESC` +
+        (pagination ? ' OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY' : ''),
+      { userId: req.userId, ...(pagination ? { offset: pagination.offset, limit: pagination.limit } : {}) },
       { outFormat: oracledb.OUT_FORMAT_OBJECT }
     );
-    res.json({ success: true, data: result.rows.map(expenseFromRow) });
+    let metadata;
+    if (pagination) {
+      const count = await connection.execute(
+        'SELECT COUNT(*) AS TOTAL FROM CC_GASTOS_SYNC WHERE USER_ID = :userId',
+        { userId: req.userId }, { outFormat: oracledb.OUT_FORMAT_OBJECT }
+      );
+      const total = count.rows[0].TOTAL;
+      metadata = { page: pagination.page, limit: pagination.limit, total, pages: Math.ceil(total / pagination.limit) };
+    }
+    res.json({ success: true, data: result.rows.map(expenseFromRow), ...(metadata ? { pagination: metadata } : {}) });
   } catch (error) {
     console.error('Error al listar gastos:', error.message);
     res.status(500).json({ success: false, message: 'No fue posible listar los gastos' });
@@ -136,16 +153,10 @@ app.get('/api/gastos', requireAuth, async (req, res) => {
 app.post('/api/gastos', requireAuth, async (req, res) => {
   let connection;
   const { client_operation_id: operationId, user_id: userId, category_id: categoryId,
-    amount, description, date, updated_at: updatedAt, latitude, longitude } = req.body;
-  const hasInvalidLatitude = latitude !== undefined && latitude !== null && typeof latitude !== 'number';
-  const hasInvalidLongitude = longitude !== undefined && longitude !== null && typeof longitude !== 'number';
-  if (userId !== req.userId || !operationId || !categoryId || typeof amount !== 'number' || amount <= 0 || !date || !updatedAt || !String(description || '').trim() || hasInvalidLatitude || hasInvalidLongitude) {
-    return res.status(422).json({ success: false, message: 'Error de validación', errors: {
-      amount: typeof amount !== 'number' || amount <= 0 ? 'El monto debe ser mayor que 0' : undefined,
-      description: !String(description || '').trim() ? 'La descripción es obligatoria' : undefined,
-      latitude: hasInvalidLatitude ? 'La latitud debe ser numérica' : undefined,
-      longitude: hasInvalidLongitude ? 'La longitud debe ser numérica' : undefined
-    } });
+    amount, description, date, updated_at: updatedAt, latitude, longitude } = req.body || {};
+  const errors = validateExpense(req.body, { userId: req.userId });
+  if (Object.keys(errors).length) {
+    return res.status(422).json({ success: false, message: 'Error de validación', errors });
   }
   try {
     connection = await oracledb.getConnection({
@@ -154,12 +165,18 @@ app.post('/api/gastos', requireAuth, async (req, res) => {
       connectString: process.env.DB_CONNECT_STRING
     });
     await ensureExpensesTable(connection);
+    const existing = await connection.execute(
+      'SELECT USER_ID FROM CC_GASTOS_SYNC WHERE CLIENT_OPERATION_ID = :operationId',
+      { operationId }, { outFormat: oracledb.OUT_FORMAT_OBJECT }
+    );
+    if (existing.rows.length && existing.rows[0].USER_ID !== req.userId) {
+      return res.status(409).json({ success: false, message: 'Identificador de operación no disponible' });
+    }
     await connection.execute(`
       MERGE INTO CC_GASTOS_SYNC target
       USING (SELECT :operationId client_operation_id FROM dual) source
-      ON (target.CLIENT_OPERATION_ID = source.client_operation_id)
+      ON (target.CLIENT_OPERATION_ID = source.client_operation_id AND target.USER_ID = :userId)
       WHEN MATCHED THEN UPDATE SET
-        target.USER_ID = :userId,
         target.CATEGORY_ID = :categoryId,
         target.AMOUNT = :amount,
         target.DESCRIPTION = :description,
@@ -176,13 +193,88 @@ app.post('/api/gastos', requireAuth, async (req, res) => {
       description: description || '', expenseDate: new Date(date), updatedAt: new Date(updatedAt),
       latitude: latitude ?? null, longitude: longitude ?? null }, { autoCommit: true });
     const result = await connection.execute(
-      `SELECT * FROM CC_GASTOS_SYNC WHERE CLIENT_OPERATION_ID = :operationId`,
-      { operationId }, { outFormat: oracledb.OUT_FORMAT_OBJECT }
+      `SELECT * FROM CC_GASTOS_SYNC WHERE CLIENT_OPERATION_ID = :operationId AND USER_ID = :userId`,
+      { operationId, userId: req.userId }, { outFormat: oracledb.OUT_FORMAT_OBJECT }
     );
-    res.status(200).json({ success: true, data: expenseFromRow(result.rows[0]) });
+    res.status(existing.rows.length ? 200 : 201).json({ success: true, data: expenseFromRow(result.rows[0]) });
   } catch (error) {
+    if (error.errorNum === 1) {
+      return res.status(409).json({ success: false, message: 'Identificador de operación duplicado; consulte el registro antes de reintentar' });
+    }
     console.error('Error al sincronizar gasto:', error.message);
     res.status(500).json({ success: false, message: 'No fue posible sincronizar el gasto' });
+  } finally {
+    if (connection) await connection.close();
+  }
+});
+
+app.param('expenseId', (req, res, next, value) => {
+  if (!validExpenseId(value)) {
+    return res.status(422).json({ success: false, message: 'Error de validación', errors: { expenseId: 'ID inválido' } });
+  }
+  next();
+});
+
+app.get('/api/gastos/:expenseId', requireAuth, async (req, res) => {
+  let connection;
+  try {
+    connection = await oracledb.getConnection({ user: process.env.DB_USER, password: process.env.DB_PASSWORD, connectString: process.env.DB_CONNECT_STRING });
+    await ensureExpensesTable(connection);
+    const result = await connection.execute(
+      'SELECT * FROM CC_GASTOS_SYNC WHERE ID_GASTO = :expenseId AND USER_ID = :userId',
+      { expenseId: Number(req.params.expenseId), userId: req.userId }, { outFormat: oracledb.OUT_FORMAT_OBJECT }
+    );
+    if (!result.rows.length) return res.status(404).json({ success: false, message: 'Gasto no encontrado' });
+    res.json({ success: true, data: expenseFromRow(result.rows[0]) });
+  } catch (_) {
+    res.status(500).json({ success: false, message: 'No fue posible consultar el gasto' });
+  } finally {
+    if (connection) await connection.close();
+  }
+});
+
+app.put('/api/gastos/:expenseId', requireAuth, async (req, res) => {
+  const errors = validateExpense(req.body, { create: false, userId: req.userId });
+  if (Object.keys(errors).length) return res.status(422).json({ success: false, message: 'Error de validación', errors });
+  let connection;
+  try {
+    connection = await oracledb.getConnection({ user: process.env.DB_USER, password: process.env.DB_PASSWORD, connectString: process.env.DB_CONNECT_STRING });
+    await ensureExpensesTable(connection);
+    const result = await connection.execute(
+      `UPDATE CC_GASTOS_SYNC SET CATEGORY_ID = :categoryId, AMOUNT = :amount, DESCRIPTION = :description,
+        EXPENSE_DATE = :expenseDate, LATITUDE = :latitude, LONGITUDE = :longitude, UPDATED_AT = SYSTIMESTAMP
+        WHERE ID_GASTO = :expenseId AND USER_ID = :userId`,
+      { categoryId: req.body.category_id, amount: req.body.amount, description: req.body.description,
+        expenseDate: new Date(req.body.date), latitude: req.body.latitude ?? null, longitude: req.body.longitude ?? null,
+        expenseId: Number(req.params.expenseId), userId: req.userId }, { autoCommit: false }
+    );
+    if (!result.rowsAffected) return res.status(404).json({ success: false, message: 'Gasto no encontrado' });
+    const updated = await connection.execute(
+      'SELECT * FROM CC_GASTOS_SYNC WHERE ID_GASTO = :expenseId AND USER_ID = :userId',
+      { expenseId: Number(req.params.expenseId), userId: req.userId }, { outFormat: oracledb.OUT_FORMAT_OBJECT }
+    );
+    await connection.commit();
+    res.json({ success: true, data: expenseFromRow(updated.rows[0]) });
+  } catch (_) {
+    res.status(500).json({ success: false, message: 'No fue posible actualizar el gasto' });
+  } finally {
+    if (connection) await connection.close();
+  }
+});
+
+app.delete('/api/gastos/:expenseId', requireAuth, async (req, res) => {
+  let connection;
+  try {
+    connection = await oracledb.getConnection({ user: process.env.DB_USER, password: process.env.DB_PASSWORD, connectString: process.env.DB_CONNECT_STRING });
+    await ensureExpensesTable(connection);
+    const result = await connection.execute(
+      'DELETE FROM CC_GASTOS_SYNC WHERE ID_GASTO = :expenseId AND USER_ID = :userId',
+      { expenseId: Number(req.params.expenseId), userId: req.userId }, { autoCommit: true }
+    );
+    if (!result.rowsAffected) return res.status(404).json({ success: false, message: 'Gasto no encontrado' });
+    res.json({ success: true, data: { server_id: Number(req.params.expenseId) }, message: 'Gasto eliminado' });
+  } catch (_) {
+    res.status(500).json({ success: false, message: 'No fue posible eliminar el gasto' });
   } finally {
     if (connection) await connection.close();
   }
@@ -225,6 +317,17 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Servidor CashControl ejecutándose en http://localhost:${PORT}`);
+app.use((error, req, res, next) => {
+  if (res.headersSent) return next(error);
+  const malformed = error instanceof SyntaxError && error.status === 400;
+  res.status(malformed ? 400 : 500).json({ success: false,
+    message: malformed ? 'JSON inválido' : 'Ocurrió un error en el servidor' });
 });
+
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Servidor CashControl ejecutándose en http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;
