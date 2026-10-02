@@ -2,6 +2,121 @@
 
 CashControl es una aplicación móvil multiplataforma orientada a la gestión de finanzas personales. Su objetivo es permitir que los usuarios puedan registrar y controlar ingresos, gastos y presupuestos mediante una aplicación móvil conectada a un backend propio y una base de datos relacional.
 
+## Semana 9 – Entorno móvil verificado
+
+Verificación realizada el 2 de octubre de 2026 sin recrear el proyecto,
+reinstalar SDKs ni crear un AVD. El destino usado es el teléfono Android físico
+Samsung SM A715F, `R58R11JDHBL`, Android 13/API 33, conectado por USB.
+
+### Equipo y herramientas
+
+| Elemento | Valor observado |
+| --- | --- |
+| Sistema | Windows 11 Home Single Language, 25H2, build 26200.9550 |
+| CPU | Intel Core i3-10110U |
+| RAM total / disponible durante la revisión | 15,83 GB / 3,97 GB |
+| Espacio libre en C: durante la revisión | 36,30 GB |
+| Flutter / Dart | 3.47.0 stable / 3.13.0 |
+| Flutter SDK | `C:\src\flutter`, disponible en PATH |
+| DevTools | 2.60.0 |
+| Visual Studio Code | 1.140.0 |
+| Extensiones oficiales | `dart-code.dart-code` y `dart-code.flutter`, ambas 3.144.0 |
+| Android Studio | build 261.26222.65.2613.15948027 |
+| Java de Android Studio | OpenJDK 25.0.2 |
+| Android CLI / cmdline-tools | 23.0 |
+| Android platform-tools | 37.0.1; ADB 1.0.41 |
+| Android build-tools | 36.0.0 |
+| compileSdk / targetSdk / minSdk | 37 / 36 / 24 |
+| Node.js / npm | 24.19.0 / 11.17.0 |
+
+El equipo permitió compilar, instalar y ejecutar el proyecto Android. Se recomienda
+cerrar procesos pesados durante la compilación por la RAM disponible. Windows informa
+`HypervisorPresent=True` y `VirtualizationFirmwareEnabled=False`; bajo un hipervisor
+esa lectura no certifica la configuración del firmware. No se modifica BIOS ni se
+requiere virtualización para el destino físico elegido.
+
+Flutter se mantiene por reutilización de código, herramientas de depuración y
+hot reload, comunidad y plugins nativos. HTTP utiliza `http`/`IOClient`, las
+credenciales `flutter_secure_storage` y la navegación existente los mecanismos
+de Flutter (`MaterialApp`, `Navigator` y diálogos); no se añade un router externo
+sin necesidad. Las versiones resueltas quedan en `mobile/pubspec.lock`; se corrige
+su exclusión de Git para reproducibilidad, conservando las exclusiones de secretos
+y archivos generados.
+
+### Diagnóstico y limitaciones reales
+
+Se ejecutaron `flutter doctor -v` y `flutter doctor --android-licenses`.
+
+- Android: Flutter todavía reporta licencias en estado desconocido. La CLI Android
+   23.0 responde que `--licenses` ya no es necesario y el SDK dispone de
+   `licenses/android-sdk-license`. La compilación real funciona, pero no se presenta
+   ese hallazgo de doctor como resuelto: requiere una versión compatible del flujo
+   de diagnóstico/licencias. No se modifica el SDK ni se simula su aceptación.
+- Windows desktop: Visual Studio C++ no está instalado. No bloquea Android;
+   compilar para Windows requerirá ese workload en una etapa específica.
+- Red: doctor detectó un timeout puntual hacia GitHub. `git ls-remote origin HEAD`
+   sí respondió, comprobando conectividad Git; no es un problema de la API local.
+- iOS: no se dispone de macOS/Xcode ni de un destino iOS configurado. La alternativa
+   es un Mac o runner macOS con Xcode para agregar, compilar y probar esa plataforma,
+   con sus credenciales de firma. No se afirma haber validado iOS desde Windows.
+
+Por lo tanto, el destino Android está operativo, pero el diagnóstico global no se
+declara completamente verde ni listo para Windows/iOS.
+
+### Transporte local acotado
+
+El manifiesto principal declara `INTERNET` y `usesCleartextTraffic=false`.
+Solo `src/debug` referencia una política de red con HTTP permitido para los hosts
+exactos `127.0.0.1`, `localhost` y `10.0.2.2`, sin subdominios. La política base
+mantiene HTTP bloqueado para otros hosts; no se habilita cleartext globalmente.
+Para un backend LAN diferente debe añadirse explícitamente su host a la política
+debug o usar HTTPS, no desactivar la seguridad global.
+
+El manifiesto release generado fue verificado: contiene INTERNET, conserva
+cleartext=false y no incluye la política debug. `ApiClient` sigue exigiendo HTTPS
+en release y el backend también exige certificados cuando se ejecuta en producción.
+No se configuran excepciones globales de transporte para iOS.
+
+### Ejecución y evidencias
+
+En una terminal ejecutar el backend:
+
+```powershell
+cd C:\Proyectos\cashcontrol\backend
+npm start
+```
+
+En otra, verificar el destino y establecer el túnel:
+
+```powershell
+$adb="$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe"
+& $adb devices
+& $adb -s R58R11JDHBL reverse tcp:3000 tcp:3000
+cd C:\Proyectos\cashcontrol\mobile
+flutter run -d R58R11JDHBL --dart-define=API_BASE_URL=http://127.0.0.1:3000
+```
+
+La URL es configuración de compilación, no un secreto. En el teléfono físico
+se usa loopback con adb reverse; `10.0.2.2` corresponde únicamente al emulador.
+Después de reconectar USB debe comprobarse/restablecerse el túnel.
+
+Evidencias verificadas durante esta revisión:
+
+- `flutter build apk --debug`: APK generado correctamente e instalado como
+   actualización, sin desinstalar ni limpiar SQLite.
+- Actividad `com.example.mobile/.MainActivity`: apertura correcta en SM A715F.
+- `flutter attach` y tecla `r`: hot reload completado en 945 ms; 0 bibliotecas
+   modificadas, sin necesidad de reinstalar.
+- API propia `/api/health`: respuesta `success=true`, `database=CONNECTED`.
+- XML principal/debug y manifiesto release generado: políticas de transporte
+   separadas, sin excepción HTTP en release.
+
+Para el video conservar capturas de doctor con sus advertencias reales, ejecución
+en el teléfono, resultado de hot reload y diagnóstico de API. No mostrar `.env`,
+contraseñas, JWT ni claves privadas. GitHub Copilot asistió en inspección y
+configuración; la información se verificó con comandos reales, XML generado,
+compilación Android, ejecución física y la API propia.
+
 ## Semana 8 – Optimización medida del backend
 
 Se midieron y optimizaron las lecturas de `/api/gastos` manteniendo el contrato
@@ -314,8 +429,8 @@ La aplicación móvil no se conecta directamente con la base de datos. Toda comu
 * Flutter 3.47.0
 * Dart 3.13.0
 * Android SDK 36.0.0
-* Emulador Pixel 5
-* Android 15 – API 35
+* compileSdk 37 / targetSdk 36
+* Teléfono físico Samsung SM A715F, Android 13 – API 33
 * Paquete HTTP para consumo de servicios REST
 
 ### Backend
@@ -351,13 +466,16 @@ Para comprobar la instalación del entorno se utiliza:
 flutter doctor -v
 ```
 
-El entorno Android se encuentra configurado correctamente con Android SDK, emulador y licencias aceptadas.
+El entorno Android permite compilar y ejecutar en el teléfono físico. Consulte la
+sección Semana 9 para las versiones y los hallazgos actuales de diagnóstico,
+incluida la incompatibilidad de verificación de licencias.
 
 El diagnóstico puede mostrar una advertencia relacionada con Visual Studio para desarrollo de aplicaciones Windows. Esta advertencia no afecta al proyecto, debido a que CashControl se ejecuta actualmente sobre Android.
 
-## Ejecución del emulador
+## Destino Android
 
-El proyecto utiliza un emulador Pixel 5 con Android 15 API 35.
+El destino actual es el teléfono físico conectado por USB; no es necesario crear
+un emulador para ejecutar o demostrar el proyecto.
 
 Para verificar los dispositivos disponibles:
 
@@ -365,11 +483,11 @@ Para verificar los dispositivos disponibles:
 flutter devices
 ```
 
-El emulador utilizado aparece como:
+El teléfono aparece como:
 
 ```text
-emulator-5554
-Android 15 (API 35)
+R58R11JDHBL
+SM A715F – Android 13 (API 33)
 ```
 
 ## Ejecución de la aplicación Flutter
@@ -378,7 +496,7 @@ Desde la carpeta `mobile`:
 
 ```bash
 flutter pub get
-flutter run -d emulator-5554
+flutter run -d R58R11JDHBL --dart-define=API_BASE_URL=http://127.0.0.1:3000
 ```
 
 La aplicación puede utilizar Hot Reload durante el desarrollo presionando:
@@ -473,22 +591,24 @@ Respuesta esperada:
 
 ## Conexión desde Flutter hacia el backend
 
-Debido a que la aplicación se ejecuta en un emulador Android, no se utiliza `localhost` para acceder al backend de Windows.
+En el dispositivo físico por USB se configura `adb reverse tcp:3000 tcp:3000`.
 
 La dirección utilizada es:
 
 ```text
-http://10.0.2.2:3000
+http://127.0.0.1:3000
 ```
 
-`10.0.2.2` permite que el emulador Android acceda al host donde se ejecuta Node.js.
+Con el túnel USB, loopback del teléfono llega al backend del PC. Si se utiliza
+un emulador en otro entorno, `10.0.2.2` permite acceder al host; no es la dirección
+del destino físico actual.
 
 La URL base se configura en Flutter mediante:
 
 ```dart
 const String apiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
-  defaultValue: 'http://10.0.2.2:3000',
+   defaultValue: 'http://127.0.0.1:3000',
 );
 ```
 

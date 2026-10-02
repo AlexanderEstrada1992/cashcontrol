@@ -1,4 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET"/>
     <!-- Cámara: capturar la foto del recibo de un gasto (Semana 14). -->
     <uses-permission android:name="android.permission.CAMERA"/>
     <!-- Ubicación aproximada/precisa: etiquetar el lugar de un gasto (Semana 14). -->
@@ -11,6 +12,7 @@
     <application
         android:label="mobile"
         android:name="${applicationName}"
+        android:usesCleartextTraffic="false"
         android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"
