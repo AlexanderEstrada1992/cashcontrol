@@ -68,10 +68,12 @@ class ExpenseCard extends StatelessWidget {
                           children: [
                             Icon(Icons.circle, size: 10, color: statusColor),
                             SizedBox(width: colors.spacingSm),
-                            Text(
-                              statusLabel,
-                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                color: statusColor,
+                            Expanded(
+                              child: Text(
+                                statusLabel,
+                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                  color: statusColor,
+                                ),
                               ),
                             ),
                           ],
@@ -79,19 +81,14 @@ class ExpenseCard extends StatelessWidget {
                       ],
                       if (expense.hasReceiptPhoto || expense.hasLocation) ...[
                         SizedBox(height: colors.spacingSm),
-                        Row(
+                        Wrap(
+                          spacing: colors.spacingMd,
+                          runSpacing: colors.spacingXs,
                           children: [
-                            if (expense.hasReceiptPhoto) ...[
-                              Icon(Icons.photo_camera_outlined, size: 16, color: colors.textSecondary),
-                              SizedBox(width: colors.spacingXs),
+                            if (expense.hasReceiptPhoto)
                               Text('Foto', style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: colors.textSecondary)),
-                              SizedBox(width: colors.spacingMd),
-                            ],
-                            if (expense.hasLocation) ...[
-                              Icon(Icons.location_on_outlined, size: 16, color: colors.textSecondary),
-                              SizedBox(width: colors.spacingXs),
+                            if (expense.hasLocation)
                               Text('Ubicación', style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: colors.textSecondary)),
-                            ],
                           ],
                         ),
                       ],

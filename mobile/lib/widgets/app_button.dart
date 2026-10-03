@@ -28,10 +28,10 @@ class AppButton extends StatelessWidget {
     final style = switch (variant) {
       AppButtonVariant.primary => ButtonStyle(
           backgroundColor: WidgetStateProperty.resolveWith((states) {
-            if (!enabled || loading) return Colors.grey.shade300;
+            if (!enabled) return colors.muted;
             return states.contains(WidgetState.pressed) ? colors.primaryHover : colors.primary;
           }),
-          foregroundColor: WidgetStateProperty.all(colors.onPrimary),
+          foregroundColor: WidgetStateProperty.all(enabled ? colors.onPrimary : colors.textSecondary),
           minimumSize: const WidgetStatePropertyAll(Size(48, 48)),
           padding: WidgetStatePropertyAll(
             EdgeInsets.symmetric(horizontal: colors.spacingLg, vertical: colors.spacingMd),
@@ -60,7 +60,7 @@ class AppButton extends StatelessWidget {
             child: CircularProgressIndicator(
               strokeWidth: 2,
               valueColor: AlwaysStoppedAnimation<Color>(
-                variant == AppButtonVariant.primary ? colors.onPrimary : colors.textPrimary,
+                variant == AppButtonVariant.primary && enabled ? colors.onPrimary : colors.textPrimary,
               ),
             ),
           )
@@ -75,8 +75,8 @@ class AppButton extends StatelessWidget {
               Flexible(
                 child: Text(
                   label,
-                  overflow: TextOverflow.ellipsis,
-                  maxLines: 1,
+                  textAlign: TextAlign.center,
+                  softWrap: true,
                 ),
               ),
             ],
@@ -86,6 +86,8 @@ class AppButton extends StatelessWidget {
       button: true,
       enabled: enabled && !loading,
       label: label,
+      value: loading ? 'Cargando' : null,
+      liveRegion: loading,
       child: SizedBox(
         width: fullWidth ? double.infinity : null,
         child: FilledButton(

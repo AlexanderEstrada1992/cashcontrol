@@ -219,8 +219,8 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('Permiso necesario'),
         content: Text(message),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Ahora no')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Continuar')),
+          AppButton(label: 'Ahora no', variant: AppButtonVariant.secondary, onPressed: () => Navigator.pop(context, false)),
+          AppButton(label: 'Continuar', onPressed: () => Navigator.pop(context, true)),
         ],
       ),
     );
@@ -228,6 +228,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _addExpense() async {
+    final colors = Theme.of(context).extension<CashControlColors>()!;
     final amountController = TextEditingController();
     final descriptionController = TextEditingController();
     String? photoPath;
@@ -246,12 +247,14 @@ class _HomeScreenState extends State<HomeScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                TextField(controller: amountController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Monto')),
-                TextField(controller: descriptionController, decoration: const InputDecoration(labelText: 'Descripción')),
-                const SizedBox(height: 12),
-                OutlinedButton.icon(
-                  icon: const Icon(Icons.camera_alt_outlined),
-                  label: Text(photoPath == null ? 'Adjuntar foto del recibo (opcional)' : 'Foto del recibo adjuntada'),
+                AppTextField(controller: amountController, keyboardType: TextInputType.number, label: 'Monto'),
+                AppTextField(controller: descriptionController, label: 'Descripción'),
+                SizedBox(height: colors.spacingMd),
+                AppButton(
+                  variant: AppButtonVariant.secondary,
+                  fullWidth: true,
+                  icon: Icons.camera_alt_outlined,
+                  label: photoPath == null ? 'Adjuntar foto del recibo (opcional)' : 'Foto del recibo adjuntada',
                   onPressed: () async {
                     final accepted = await _confirmRationale(
                       'CashControl utilizará la cámara únicamente para fotografiar el recibo de este gasto.',
@@ -281,16 +284,18 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 if (photoPath != null)
                   Padding(
-                    padding: const EdgeInsets.only(top: 8),
+                    padding: EdgeInsets.only(top: colors.spacingSm),
                     child: ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(colors.radiusSm),
                       child: Image.file(File(photoPath!), height: 120, fit: BoxFit.cover),
                     ),
                   ),
-                const SizedBox(height: 8),
-                OutlinedButton.icon(
-                  icon: const Icon(Icons.location_on_outlined),
-                  label: Text(latitude == null ? 'Adjuntar ubicación (opcional)' : 'Ubicación adjuntada (${latitude!.toStringAsFixed(4)}, ${longitude!.toStringAsFixed(4)})'),
+                SizedBox(height: colors.spacingSm),
+                AppButton(
+                  variant: AppButtonVariant.secondary,
+                  fullWidth: true,
+                  icon: Icons.location_on_outlined,
+                  label: latitude == null ? 'Adjuntar ubicación (opcional)' : 'Ubicación adjuntada (${latitude!.toStringAsFixed(4)}, ${longitude!.toStringAsFixed(4)})',
                   onPressed: () async {
                     final accepted = await _confirmRationale(
                       'CashControl utilizará tu ubicación únicamente para registrar el lugar de este gasto.',
@@ -324,17 +329,17 @@ class _HomeScreenState extends State<HomeScreen> {
                   },
                 ),
                 if (captureStatus != null) ...[
-                  const SizedBox(height: 8),
+                  SizedBox(height: colors.spacingSm),
                   Text(captureStatus!),
                 ],
                 if (settingsAction != null)
-                  TextButton(onPressed: settingsAction, child: const Text('Abrir ajustes')),
+                  AppButton(label: 'Abrir ajustes', variant: AppButtonVariant.secondary, onPressed: settingsAction),
               ],
             ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
-            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Guardar')),
+            AppButton(label: 'Cancelar', variant: AppButtonVariant.secondary, onPressed: () => Navigator.pop(context)),
+            AppButton(label: 'Guardar', onPressed: () => Navigator.pop(context, true)),
           ],
         ),
       ),
@@ -409,7 +414,7 @@ class _HomeScreenState extends State<HomeScreen> {
       return Scaffold(
         backgroundColor: colors.surface,
         appBar: AppBar(title: const Text('CashControl')),
-        body: Center(
+        body: SingleChildScrollView(
           child: Padding(
             padding: EdgeInsets.all(colors.spacingXl),
             child: Card(
@@ -511,10 +516,13 @@ class _HomeScreenState extends State<HomeScreen> {
                 variant: AppButtonVariant.secondary,
               ),
               SizedBox(height: colors.spacingXl),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
+              Wrap(
+                alignment: WrapAlignment.spaceBetween,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: colors.spacingMd,
+                runSpacing: colors.spacingMd,
                 children: [
-                  Expanded(child: Text('Gastos locales', style: Theme.of(context).textTheme.titleLarge)),
+                  Text('Gastos locales', style: Theme.of(context).textTheme.titleLarge),
                   AppButton(
                     label: 'Nuevo gasto',
                     icon: Icons.add,
@@ -525,7 +533,7 @@ class _HomeScreenState extends State<HomeScreen> {
               SizedBox(height: colors.spacingMd),
               AsyncStateView(
                 loading: false,
-                error: _error,
+                error: _expenses.isEmpty ? _error : null,
                 empty: _expenses.isEmpty,
                 content: Column(
                   children: [
@@ -619,7 +627,7 @@ class _StatusBanner extends StatelessWidget {
               children: [
                 Icon(Icons.circle, size: 10, color: statusColor),
                 SizedBox(width: colors.spacingSm),
-                Text(statusText, style: Theme.of(context).textTheme.titleMedium),
+                Expanded(child: Text(statusText, style: Theme.of(context).textTheme.titleMedium)),
               ],
             ),
             SizedBox(height: colors.spacingSm),

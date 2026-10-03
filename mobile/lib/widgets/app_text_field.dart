@@ -33,7 +33,7 @@ class AppTextField extends StatelessWidget {
       labelText: label,
       hintText: hintText,
       prefixIcon: prefixIcon == null ? null : Icon(prefixIcon, color: colors.textSecondary),
-      errorText: errorText,
+      error: errorText == null ? null : Text(errorText!, softWrap: true),
       contentPadding: EdgeInsets.symmetric(horizontal: colors.spacingLg, vertical: colors.spacingMd),
     );
 

@@ -22,7 +22,7 @@ Se verificó la implementación existente en `backend/server.js`.
 | Endpoint | Método | Funcionalidad | Pantalla Flutter que lo utiliza |
 | --- | --- | --- | --- |
 | `/api/health` | GET | Verifica que la API responda y que exista conexión con Oracle. | `HomeScreen` (`checkApiConnection`) |
-| `/api/gastos` | GET | Recupera gastos del usuario autenticado por `user_id`. | `HomeScreen` carga datos locales y sincronización remota, usando `ExpenseRepository.refreshFromServer()` |
+| `/api/gastos` | GET | Recupera gastos del propietario identificado por JWT. | `HomeScreen` carga datos locales y sincronización remota, usando `ExpenseRepository.refreshFromServer()` |
 | `/api/gastos` | POST | Crea o actualiza un gasto en el backend a partir de `client_operation_id` y payload del gasto. | `HomeScreen` al sincronizar cola de operaciones con `ExpenseRepository.syncPending()` |
 
 ### 2.2 Pantallas reales existentes en Flutter
@@ -31,11 +31,21 @@ Se verificó la implementación actual en `mobile/lib/main.dart`.
 
 | Pantalla o vista | Estado | Funcionalidad actual |
 | --- | --- | --- |
-| `HomeScreen` | Actual | Gestiona sesión local demo, diagnóstico de API, conexión, sincronización, gastos locales y cola de operaciones. |
-| Pantalla de acceso local | Actual | Permite iniciar una sesión demo local cuando no existe usuario autenticado. |
+| `HomeScreen` | Actual | Gestiona sesión JWT, diagnóstico de API, conexión, sincronización, gastos locales y cola de operaciones. |
+| Vista de login | Actual | Usuario, contraseña y errores de validación del backend. |
+| Formulario Nuevo gasto | Actual (diálogo) | Monto, descripción y capacidades nativas opcionales; controles del catálogo. |
 | `AsyncStateView` | Nueva en Semana 10 | Maneja estados de carga, vacío y error para la vista de contenido. |
 
 > La aplicación no contiene varias pantallas especializadas de gastos; la funcionalidad real se concentra en la pantalla principal `HomeScreen`, que es la pantalla que debe ser reutilizada para el informe técnico y la evidencia final.
+
+Inventario derivado de endpoints adicionales: registro (`POST /api/auth/register`),
+perfil (`GET /api/auth/me`), detalle/edición (`GET/PUT /api/gastos/:id`), administración
+(`GET /api/admin/users`) y exportaciones. Estos endpoints existen en la API, pero
+sus pantallas móviles todavía no se implementan. No se presentan como vistas reales.
+Los patrones candidatos en login, registro y edición son campos con errores y acciones
+con estado de carga; en listado, detalle y perfil son encabezados, datos y estados
+asíncronos. La reutilización actual se demuestra en login, principal y diálogo, sin
+inventar tres pantallas completas para justificar el catálogo.
 
 ## 3. Sistema de diseño centralizado
 
@@ -78,11 +88,17 @@ Se verificó el sistema con los valores reales del tema:
 
 | Par de colores | Fondo | Texto | Relación | Resultado |
 | --- | --- | --- | --- | --- |
-| Texto principal sobre fondo | `#F6F8FF` | `#101828` | ~15.7:1 | AA superado |
-| Texto secundario sobre fondo | `#F6F8FF` | `#475467` | ~8.9:1 | AA superado |
-| Texto sobre color primario | `#2E6DEB` | `#FFFFFF` | ~4.9:1 | AA superado |
-| Texto sobre error | `#B42318` | `#FFFFFF` | ~4.6:1 | AA superado |
-| Texto sobre success | `#027A48` | `#FFFFFF` | ~4.8:1 | AA superado |
+| Texto principal sobre fondo | `#F6F8FF` | `#101828` | 16.72:1 | AA superado |
+| Texto secundario sobre fondo | `#F6F8FF` | `#475467` | 7.24:1 | AA superado |
+| Texto sobre color primario | `#2E6DEB` | `#FFFFFF` | 4.66:1 | AA superado |
+| Texto sobre error | `#B42318` | `#FFFFFF` | 6.57:1 | AA superado |
+| Texto sobre success | `#027A48` | `#FFFFFF` | 5.41:1 | AA superado |
+
+Las pruebas calculan luminancia relativa con `Color.computeLuminance()` y contrastan
+14 combinaciones textuales contra 4.5:1. También verifican el icono primario sobre
+muted (4.23:1) contra el mínimo no textual de 3:1. No se aplica el umbral de texto
+a bordes puramente decorativos. Esto verifica los pares probados, no certifica por
+sí solo toda la aplicación como conforme a WCAG 2.2.
 
 ### Método
 
@@ -151,6 +167,18 @@ Cada componente cumple estas condiciones:
 - Consume `Theme` y `ThemeExtension`.
 - Delega el contenido cuando corresponde.
 
+| Componente | Parámetros obligatorios | Opcionales y valores por defecto | Acciones/contenido |
+| --- | --- | --- | --- |
+| `AppButton` | `label`, `onPressed` (admite null) | `icon=null`, `loading=false`, `enabled=true`, `variant=primary`, `fullWidth=false` | Callback de acción; etiqueta y estado de carga semánticos |
+| `AppTextField` | Ninguno | controller/label/hintText/prefixIcon/keyboardType/validator/onChanged/errorText nulos; `obscureText=false` | Callbacks onChanged/validator; errores con texto envolvente |
+| `ExpenseCard` | `expense` | `onTap=null`, `showStatus=true` | Callback opcional, modelo independiente de API |
+| `AsyncStateView` | `loading`, `error` (admite null), `empty`, `content` | Mensajes predeterminados de carga/error/vacío | Delega contenido normal mediante `content`; prioridad carga, error, vacío, contenido |
+
+Las razones de reutilización son tamaño táctil/estados compartidos, entradas con
+validación consistente, representación repetida de gastos y presentación uniforme
+de resultados asíncronos. Los componentes no contienen HTTP, SQL ni rutas Navigator;
+la pantalla les entrega callbacks y datos.
+
 ## 7. Pantalla real ensamblada
 
 La pantalla real que se actualizó es `HomeScreen` en `mobile/lib/main.dart`.
@@ -160,7 +188,15 @@ Se reutilizaron los componentes como sigue:
 - `AppButton` para sesión, conexión y nueva acción de gasto
 - `AsyncStateView` para estados de carga, vacío y error
 - `ExpenseCard` para cada gasto local
-- `AppTextField` disponible para futuros formularios de entrada
+- `AppTextField` en login y formulario de gastos
+
+El formulario y la explicación de permisos utilizan `AppButton` en sus acciones.
+Se mantienen widgets estructurales de Flutter (Scaffold, Text, layouts, AlertDialog),
+sin duplicar controles interactivos fuera del catálogo. El login es desplazable;
+botones, estados y adjuntos admiten ajuste de línea con fuente ampliada. Los gastos
+locales permanecen visibles cuando falla la sincronización; el error se muestra en
+el banner. La traducción de fallos de red/autenticación/validación/servidor sigue en
+la capa API y no introduce consultas en los componentes.
 
 La pantalla se mantiene compatible con la funcionalidad de sincronización de la Semana 12 sin romper las capas existentes de SQLite, sincronización y API.
 
@@ -201,7 +237,10 @@ La pantalla principal hace uso de `LayoutBuilder` para detectar dos anchuras:
 
 Además, la interfaz usa tamaños y espaciados del sistema para evitar overflow y soportar texto ampliado con `Expanded`, `Flexible` y `Column`/`Row` responsivos.
 
-La verificación visual debe realizarse manualmente en un emulador con una escala de texto ampliada; no se encontraron valores fijos de dimensiones que rompan el diseño en código, pero la validación final debe dejarse en el entorno de ejecución de Flutter.
+Se ejecutan pruebas de widgets del catálogo a 320 y 700 píxeles lógicos con escalas
+de texto 1.0 y 2.0, sin excepciones de layout. Se verifica además el tamaño mínimo
+48x48 de AppButton y que las etiquetas no estén limitadas a una línea con elipsis.
+Estas pruebas no sustituyen la comprobación física completa ni el lector de pantalla.
 
 ## 10. Registro de uso de inteligencia artificial
 
@@ -220,7 +259,7 @@ Se utilizó GitHub Copilot como herramienta de asistencia para:
 Para construir el informe final en PDF se recomienda tomar capturas de:
 
 1. `HomeScreen` con la vista principal de gastos.
-2. La sesión demo local (pantalla sin usuario).
+2. La vista de login (pantalla sin usuario).
 3. El estado de sincronización y diagnóstico de API.
 4. El catálogo de componentes reutilizables.
 5. La vista de estado vacío.
@@ -229,12 +268,23 @@ Para construir el informe final en PDF se recomienda tomar capturas de:
 
 Estas capturas deben acompañarse del código fuente real que quedó en la carpeta `mobile/lib`.
 
-## 12. Requisitos de validación pendientes
+## 12. Verificación y evidencia manual
 
-La validación de ejecución debe completarse en el entorno Flutter con emulador o dispositivo real, y se debe verificar manualmente:
+Comandos de comprobación: `flutter analyze` y `flutter test`. La instalación se
+realiza como actualización en el Android físico, sin desinstalar ni purgar SQLite.
+Las pruebas automatizadas cubren contraste, carga, vacío, ajuste a dos anchos y
+texto ampliado. El resultado y la instalación de la revisión actual deben
+acompañarse de las evidencias de ejecución, no solo del código.
 
-- `flutter analyze`
-- `flutter test`
-- ejecución de la app sobre Android/emulador
-- comprobación visual de ancho pequeño y ancho grande
-- comprobación manual con textScaleFactor ampliado
+Resultado de la revisión del 2 de octubre de 2026: `flutter analyze` sin problemas,
+12 pruebas Flutter aprobadas, APK debug compilado e instalado correctamente en
+SM A715F mediante actualización. La actividad abrió y la API desde el teléfono
+respondió `database: CONNECTED`. Hot reload completado en 931 ms; no había
+bibliotecas pendientes de cambio tras la instalación.
+
+Comprobación manual de TalkBack: el usuario confirmó el 2 de octubre de 2026
+haber realizado el recorrido en el teléfono. Esta evidencia es una confirmación
+humana, no una prueba automatizada ni una certificación completa de WCAG 2.2.
+Para conservar la evidencia del informe se recomienda adjuntar la captura o
+grabación del recorrido y sus observaciones. Las pruebas automáticas de dos
+anchos y fuente ampliada se documentan por separado.

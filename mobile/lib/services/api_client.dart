@@ -138,6 +138,14 @@ class ApiClient {
       return ValidationFailure(rawErrors.map((key, value) => MapEntry(key, value.toString())));
     }
     if (response.statusCode >= 500) return const ServerFailure();
-    return HttpFailure('HTTP ${response.statusCode}');
+    final message = switch (response.statusCode) {
+      400 => 'Revise los datos de la solicitud.',
+      403 => 'No tiene permisos para realizar esta operación.',
+      404 => 'No se encontró la información solicitada.',
+      409 => 'El registro entra en conflicto con información existente.',
+      429 => 'Demasiadas solicitudes. Intente nuevamente más tarde.',
+      _ => 'No fue posible completar la solicitud.',
+    };
+    return HttpFailure(message);
   }
 }
