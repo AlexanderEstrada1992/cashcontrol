@@ -44,6 +44,7 @@ dependencies:
   geolocator: ^14.0.2
   permission_handler: ^13.0.2
   go_router: ^18.0.2
+  sentry_flutter: ^9.30.1
 
 dev_dependencies:
   flutter_test:

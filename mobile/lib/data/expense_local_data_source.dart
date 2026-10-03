@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:sqflite/sqflite.dart';
 
@@ -30,30 +31,42 @@ class ExpenseLocalDataSource {
     return rows.isEmpty ? null : DateTime.tryParse(rows.first['value']! as String);
   }
 
-  Future<void> saveRemoteExpenses(String userId, List<Expense> expenses) async {
+  Future<void> saveRemoteExpenses(String userId, List<Expense> expenses, {DateTime? syncedAt}) async {
     final db = await database.database;
     await db.transaction((transaction) async {
       final existing = await transaction.query('expenses',
         columns: ['client_operation_id', 'receipt_photo_path'], where: 'user_id = ?', whereArgs: [userId]);
       final photos = {for (final row in existing) row['client_operation_id']: row['receipt_photo_path']};
-      DateTime? lastServerUpdate;
       for (final expense in expenses) {
         final row = expense.toMap();
         row['receipt_photo_path'] ??= photos[expense.clientOperationId];
         await transaction.insert('expenses', row, conflictAlgorithm: ConflictAlgorithm.replace);
-        final updatedAt = expense.updatedAt.toUtc();
-        if (lastServerUpdate == null || updatedAt.isAfter(lastServerUpdate)) {
-          lastServerUpdate = updatedAt;
-        }
       }
-      if (lastServerUpdate != null) {
+      if (syncedAt != null) {
         await transaction.insert(
           'app_metadata',
-          {'key': 'last_sync_$userId', 'value': lastServerUpdate.toIso8601String()},
+          {'key': 'last_sync_$userId', 'value': syncedAt.toUtc().toIso8601String()},
           conflictAlgorithm: ConflictAlgorithm.replace,
         );
       }
     });
+  }
+
+  Future<void> clearUserData(String userId) async {
+    final db = await database.database;
+    final rows = await db.query('expenses', columns: ['receipt_photo_path'],
+        where: 'user_id = ?', whereArgs: [userId]);
+    for (final row in rows) {
+      final path = row['receipt_photo_path'] as String?;
+      if (path == null || path.isEmpty) continue;
+      try {
+        final file = File(path);
+        if (await file.exists()) await file.delete();
+      } on FileSystemException {
+        // Continue clearing the user's database data if temporary media is unavailable.
+      }
+    }
+    await database.clearUserData(userId);
   }
 
   Future<Expense> createPending(Expense expense) async {

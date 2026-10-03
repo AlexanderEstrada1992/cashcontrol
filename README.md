@@ -908,7 +908,7 @@ El proyecto quedó preparado para generar el informe técnico de la Semana 10 co
 
 ## Persistencia local y funcionamiento offline
 
-La aplicación usa SQLite mediante `sqflite`, con migraciones versionadas. La base local contiene `expenses`, `pending_operations` y `app_metadata`. Los gastos se filtran por `user_id`; cada gasto conserva `local_id`, `server_id`, `client_operation_id`, categoría, monto, fechas y estado de sincronización. La versión 2 añade `last_synced_at` sin borrar la base existente.
+La aplicación usa SQLite mediante `sqflite`, con migraciones versionadas. La base local contiene `expenses`, `pending_operations` y `app_metadata`. Los gastos se filtran por `user_id`; cada gasto conserva `local_id`, `server_id`, `client_operation_id`, categoría, monto, fechas y estado de sincronización. La versión 2 añade `last_synced_at` y la versión 3 añade ruta de recibo y coordenadas sin borrar la base existente.
 
 ### Clasificación y minimización de datos
 
@@ -925,7 +925,7 @@ No se guardan contraseñas ni tokens en SQLite o almacenamiento simple clave/val
 
 ### Lectura y escritura offline
 
-Al iniciar una sesión se leen primero los gastos locales. Si hay red, se actualizan desde `GET /api/gastos`; sin red, la pantalla muestra los datos almacenados y el texto `Sin conexión / Datos desactualizados` junto con la antigüedad real de `last_synced_at`. Un gasto creado sin conexión se guarda inmediatamente con `client_operation_id`, aparece con `Pendiente de sincronización` y se inserta en `pending_operations`.
+Al iniciar una sesión se leen primero los gastos locales. Si hay red, se actualizan desde `GET /api/gastos`; sin red, la pantalla muestra los datos almacenados y un aviso de caché vencida tras 24 horas. El valor `last_sync_<userId>` se toma del encabezado ISO UTC `X-Server-Time` emitido por el backend, no del reloj del teléfono. Si una versión anterior del backend no incluye el encabezado, se conserva la última marca válida en vez de sustituirla por tiempo del cliente. Un gasto creado sin conexión se guarda inmediatamente con `client_operation_id`, aparece con `Pendiente de sincronización` y se inserta en `pending_operations`.
 
 `SyncService` escucha `connectivity_plus` y procesa la cola al recuperar conectividad. Usa como máximo cinco intentos con espera creciente de 1, 2, 4, 8 y 8 segundos. Una operación agotada queda en estado `failed` para diagnóstico o reintento manual, sin bucles infinitos.
 
@@ -935,7 +935,7 @@ Al iniciar una sesión se leen primero los gastos locales. Si hay red, se actual
 
 ### Logout y datos personales
 
-Cerrar sesión elimina access token, refresh token, credenciales seguras, gastos del usuario, operaciones pendientes, metadatos de sincronización y estado en memoria antes de volver a la pantalla de inicio. Así no quedan datos financieros del usuario anterior en la aplicación.
+Cerrar sesión elimina access token, refresh token, credenciales seguras, gastos del usuario, operaciones pendientes, metadatos de sincronización, estado en memoria y archivos de recibo asociados antes de volver a la pantalla de inicio. Así no quedan datos financieros ni fotos de recibos del usuario anterior en la aplicación. Las coordenadas se conservan solo como parte del gasto que la interfaz muestra; no se almacenan campos adicionales del dispositivo.
 
 Las funcionalidades definitivas de CashControl, como autenticación, roles, CRUD, ingresos, gastos, presupuestos y optimización del backend, continuarán desarrollándose progresivamente.
 
@@ -1026,4 +1026,41 @@ Para ubicación existe un quinto caso, verificado por separado del permiso: **se
 | 5 | Crear gasto con foto y ubicación sin conexión, luego sincronizar | El gasto se guarda localmente, se sincroniza al recuperar conexión y conserva la foto local y las coordenadas remotas. |
 
 Estos cinco casos deben ejecutarse y grabarse en el teléfono Android físico usado durante el proyecto, no en el emulador.
+
+## Semana 15 – Calidad, observabilidad y rendimiento
+
+### Verificaciones automatizadas
+
+La suite Flutter incluye pruebas de transporte HTTP con `MockClient` para respuestas correctas, renovación tras `401`, validación `422` y timeout agotado; pruebas widget para estados de carga, datos, vacío y error; y una prueba offline que confirma que la caché permanece visible sin solicitudes HTTP. El recorrido de inicio de sesión, destino privado y creación con borrador se conserva en `mobile/test/week11_test.dart`.
+
+Ejecutar localmente desde `mobile/`:
+
+```powershell
+flutter analyze
+flutter test --coverage
+```
+
+El workflow `.github/workflows/mobile-ci.yml` ejecuta resolución de dependencias, análisis, pruebas con cobertura y compilación APK debug en Ubuntu para cambios de la app móvil.
+
+### Logs y monitoreo
+
+Los eventos estructurados usan nombres cerrados y solo admiten metadatos numéricos (conteos, duración, código HTTP y tiempos de frame). No incluyen cuerpo HTTP, descripción de gastos, tokens, identificadores de usuario ni coordenadas. `Sentry` está desactivado si no se configura un DSN y `sendDefaultPii` permanece deshabilitado:
+
+```powershell
+flutter run --dart-define=SENTRY_DSN=<dsn>
+```
+
+No se adjuntan datos de usuario a los eventos ni se activan trazas distribuidas por defecto. El valor DSN se configura en tiempo de compilación y no se guarda en el repositorio.
+
+### Medición de frames en dispositivo
+
+En modo `profile`, `FramePerformanceMonitor` agrupa ventanas de 60 frames y emite cantidad de frames lentos y máximos de duración de build/raster. Se considera lento si build o raster supera 16,667 microsegundos. Para medir en el teléfono físico:
+
+```powershell
+flutter run --profile -d R58R11JDHBL
+```
+
+La agregación también se midió en el SM A715F (Android 13) en modo profile durante desplazamientos de la lista: cinco ventanas, 300 frames en total. La ventana inicial registró 3 frames lentos de 60, con máximos de build de 47 ms y raster de 24 ms; las cuatro ventanas posteriores no registraron frames lentos (0/240), con máximos de build de 1 ms y raster de 14 ms. Es una muestra corta de arranque e interacción, no un benchmark de larga duración. Los eventos JSON se observaron en `adb logcat` sin contenido de gastos ni identificadores.
+
+La recepción de eventos en Sentry no se probó porque `SENTRY_DSN` no está configurado en el entorno. La CI local se validó ejecutando análisis, pruebas con cobertura y compilaciones Android; el workflow remoto de GitHub requiere que los cambios se publiquen en el repositorio para ejecutarse.
 

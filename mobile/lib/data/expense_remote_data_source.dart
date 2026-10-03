@@ -6,7 +6,7 @@ class ExpenseRemoteDataSource {
 
   final ApiService api;
 
-  Future<List<Expense>> fetchExpenses(String userId) => api.fetchExpenses(userId);
+  Future<ExpenseSnapshot> fetchExpenses(String userId) => api.fetchExpenseSnapshot(userId);
   Future<Expense> createExpense(Expense expense) => api.createExpense(expense);
   Future<Expense> fetchExpense(String id, String userId) => api.fetchExpense(id, userId);
 }

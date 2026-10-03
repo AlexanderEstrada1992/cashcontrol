@@ -25,6 +25,7 @@ app.use(express.json({ limit: '32kb' }));
 app.use((req, res, next) => {
   res.set('Cache-Control', 'no-store');
   res.set('X-Content-Type-Options', 'nosniff');
+  res.set('X-Server-Time', new Date().toISOString());
   next();
 });
 app.get('/api/openapi.json', (req, res) => res.json(require('./openapi.json')));

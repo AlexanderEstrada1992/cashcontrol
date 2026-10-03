@@ -1,18 +1,25 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kProfileMode;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import 'core/theme/cashcontrol_theme.dart';
 import 'navigation/route_guard.dart';
+import 'services/monitoring_service.dart';
 import 'screens/expense_screens.dart';
+import 'services/frame_performance_monitor.dart';
 import 'state/app_controller.dart';
 import 'widgets/app_button.dart';
 import 'widgets/async_state_view.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const CashControlApp());
+  if (kProfileMode) FramePerformanceMonitor().start();
+  await MonitoringService.run(
+    dsn: const String.fromEnvironment('SENTRY_DSN'),
+    appRunner: () => runApp(const CashControlApp()),
+  );
 }
 
 class CashControlApp extends StatefulWidget {

@@ -28,10 +28,25 @@ class ApiService {
   }
 
   Future<List<Expense>> fetchExpenses(String userId) async {
+    return (await fetchExpenseSnapshot(userId)).expenses;
+  }
+
+  Future<ExpenseSnapshot> fetchExpenseSnapshot(String userId) async {
     final response = await client.get('/api/gastos', queryParameters: {'user_id': userId});
     final decoded = jsonDecode(response.body) as Map<String, dynamic>;
     final rows = (decoded['data'] as List<dynamic>? ?? const []);
-    return rows.map((row) => _expenseFromApi(row as Map<String, dynamic>, userId)).toList();
+    String? syncedAtHeader;
+    for (final entry in response.headers.entries) {
+      if (entry.key.toLowerCase() == 'x-server-time') {
+        syncedAtHeader = entry.value;
+        break;
+      }
+    }
+    final syncedAt = syncedAtHeader == null ? null : DateTime.tryParse(syncedAtHeader)?.toUtc();
+    return ExpenseSnapshot(
+      rows.map((row) => _expenseFromApi(row as Map<String, dynamic>, userId)).toList(),
+      syncedAt: syncedAt,
+    );
   }
 
   Future<Expense> createExpense(Expense expense) async {
@@ -73,4 +88,10 @@ class AuthSession {
   final User user;
   final String accessToken;
   final String refreshToken;
+}
+
+class ExpenseSnapshot {
+  const ExpenseSnapshot(this.expenses, {required this.syncedAt});
+  final List<Expense> expenses;
+  final DateTime? syncedAt;
 }

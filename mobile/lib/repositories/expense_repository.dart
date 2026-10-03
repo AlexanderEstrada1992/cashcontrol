@@ -47,9 +47,11 @@ class ExpenseRepository {
   }
 
   Future<void> refreshFromServer(String userId) async {
-    final remoteExpenses = await remote.fetchExpenses(userId);
-    await local.saveRemoteExpenses(userId, remoteExpenses);
+    final snapshot = await remote.fetchExpenses(userId);
+    await local.saveRemoteExpenses(userId, snapshot.expenses, syncedAt: snapshot.syncedAt);
   }
+
+  Future<void> clearUserData(String userId) => local.clearUserData(userId);
 
   Future<Expense> getExpense(String userId, String id) async {
     final saved = await local.getExpenses(userId);

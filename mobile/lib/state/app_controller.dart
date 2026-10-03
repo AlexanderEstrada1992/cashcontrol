@@ -204,7 +204,7 @@ class AppController extends ChangeNotifier {
     _publish();
     await sync.dispose();
     await storage.clearCredentials();
-    if (id != null) await repository.database.clearUserData(id);
+    if (id != null) await repository.clearUserData(id);
   }
 
   Future<void> _loadLocal() async {
