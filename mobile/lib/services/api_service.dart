@@ -40,6 +40,12 @@ class ApiService {
     return _expenseFromApi(decoded['data'] as Map<String, dynamic>, expense.userId);
   }
 
+  Future<Expense> fetchExpense(String id, String userId) async {
+    final response = await client.get('/api/gastos/${Uri.encodeComponent(id)}');
+    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    return _expenseFromApi(decoded['data'] as Map<String, dynamic>, userId);
+  }
+
   Expense _expenseFromApi(Map<String, dynamic> data, String userId) {
     final serverTimestamp = DateTime.tryParse(data['updated_at']?.toString() ?? '') ?? DateTime.now().toUtc();
     return Expense(

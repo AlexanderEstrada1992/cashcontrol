@@ -14,6 +14,10 @@ class AuthenticationFailure extends AppApiException {
   const AuthenticationFailure() : super('Su sesión ha expirado. Inicie sesión nuevamente.');
 }
 
+class ForbiddenFailure extends AppApiException {
+  const ForbiddenFailure() : super('No tiene permisos para realizar esta operación.');
+}
+
 class ValidationFailure extends AppApiException {
   const ValidationFailure(this.fieldErrors) : super('Revise los datos ingresados.');
   final Map<String, String> fieldErrors;

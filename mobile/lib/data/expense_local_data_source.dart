@@ -33,8 +33,13 @@ class ExpenseLocalDataSource {
   Future<void> saveRemoteExpenses(String userId, List<Expense> expenses) async {
     final db = await database.database;
     await db.transaction((transaction) async {
+      final existing = await transaction.query('expenses',
+        columns: ['client_operation_id', 'receipt_photo_path'], where: 'user_id = ?', whereArgs: [userId]);
+      final photos = {for (final row in existing) row['client_operation_id']: row['receipt_photo_path']};
       for (final expense in expenses) {
-        await transaction.insert('expenses', expense.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+        final row = expense.toMap();
+        row['receipt_photo_path'] ??= photos[expense.clientOperationId];
+        await transaction.insert('expenses', row, conflictAlgorithm: ConflictAlgorithm.replace);
       }
       await transaction.insert(
         'app_metadata',

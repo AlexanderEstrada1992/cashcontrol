@@ -15,13 +15,19 @@ class SyncService {
     required String userId,
     required Future<void> Function() onChanged,
     Future<void> Function(bool online)? onConnectivityChanged,
+    Future<void> Function(Object error)? onError,
   }) {
+    _subscription?.cancel();
     _subscription = Connectivity().onConnectivityChanged.listen((results) async {
       final online = results.any((result) => result != ConnectivityResult.none);
       await onConnectivityChanged?.call(online);
       if (online) {
-        await sync(userId);
-        await onChanged();
+        try {
+          await sync(userId);
+          await onChanged();
+        } catch (error) {
+          await onError?.call(error);
+        }
       }
     });
   }

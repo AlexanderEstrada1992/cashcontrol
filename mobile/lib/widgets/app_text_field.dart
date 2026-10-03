@@ -14,6 +14,7 @@ class AppTextField extends StatelessWidget {
     this.validator,
     this.onChanged,
     this.errorText,
+    this.enabled = true,
   });
 
   final TextEditingController? controller;
@@ -25,6 +26,7 @@ class AppTextField extends StatelessWidget {
   final String? Function(String?)? validator;
   final ValueChanged<String>? onChanged;
   final String? errorText;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
@@ -41,6 +43,7 @@ class AppTextField extends StatelessWidget {
       textField: true,
       label: label ?? hintText ?? 'Campo de texto',
       child: TextFormField(
+        enabled: enabled,
         controller: controller,
         keyboardType: keyboardType,
         obscureText: obscureText,

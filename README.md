@@ -2,6 +2,71 @@
 
 CashControl es una aplicación móvil multiplataforma orientada a la gestión de finanzas personales. Su objetivo es permitir que los usuarios puedan registrar y controlar ingresos, gastos y presupuestos mediante una aplicación móvil conectada a un backend propio y una base de datos relacional.
 
+## Semana 11 – Navegación, estado y formularios
+
+Se conecta `go_router` con un `AppController` compartido basado en ChangeNotifier.
+El enrutador vive durante toda la aplicación, protege las rutas privadas y permite
+reconstruir las pantallas desde su dirección. No se pasan objetos Expense por extra.
+
+| Dirección | Pantalla | Acceso | Endpoint/origen |
+| --- | --- | --- | --- |
+| `/login` | LoginScreen | Público | POST /api/auth/login |
+| `/cargando?from=...` | Restauración de sesión | Público transitorio | Almacenamiento seguro |
+| `/gastos` | ExpensesScreen | Autenticado | GET /api/gastos, repositorio y SQLite |
+| `/gastos/nuevo` | NewExpenseScreen | Autenticado, anidada | POST /api/gastos o pending_operations |
+| `/gastos/:id` | ExpenseDetailScreen | Autenticado, anidada | GET /api/gastos/:id o gasto local por ID |
+| `/sin-permiso?from=...` | Acceso denegado | Autenticado | Resultado de HTTP 403 |
+
+Se elige go_router por parámetros de ruta, anidamiento y redirecciones declarativas;
+ChangeNotifier basta para el alcance actual sin añadir otro framework de estado.
+Una ruta privada solicitada sin sesión se conserva en `from` y se recupera tras
+login. El destino se restringe a rutas internas de gastos para evitar redirecciones
+externas. El detalle recibe solo el ID de la dirección y consulta el repositorio.
+
+Estado de aplicación: usuario y token privado en AppController, credenciales en
+flutter_secure_storage, listado, metadatos de sincronización y borrador del usuario.
+Estado efímero: foco, controladores de edición, indicador de captura nativa y mensajes
+del formulario. El borrador sobrevive al salir del formulario y regresar mientras
+vive la app; se limpia al guardar, cerrar sesión o cambiar de usuario. No se afirma
+persistencia del borrador tras matar el proceso. Los gastos y la cola sí usan SQLite.
+
+`OperationState<T>` es un tipo sealed con IdleState, LoadingState, DataState y
+ErrorState mutuamente excluyentes. DataState con una lista vacía se presenta mediante
+el estado vacío de AsyncStateView. AppButton refleja carga; AppTextField muestra
+validación; ExpenseCard abre el detalle. Los gastos locales siguen visibles si
+falla la sincronización.
+
+El formulario valida al abandonar campos y al enviar: monto finito positivo con
+hasta dos decimales y máximo NUMBER(12,2), descripción obligatoria de hasta 255
+caracteres, categoría válida y fechas generadas en UTC. Los errores 422 se asocian
+a `amount`/`description`; errores de otros campos aparecen identificados junto al
+formulario. El borrador no se pierde si se rechaza el envío. Los inputs se bloquean
+durante la solicitud. POST conserva client_operation_id; un fallo de red/servidor
+permite conservar una operación local y no se reintenta una creación arbitraria.
+
+401 después del intento de refresh limpia credenciales y redirige al login conservando
+el destino; 403 mantiene la sesión y muestra la ruta de permisos insuficientes.
+La cámara, ubicación, sus explicaciones y acceso a ajustes siguen disponibles en
+Nuevo gasto. No se cambian las tablas ni se eliminan gastos durante la actualización.
+
+Las pruebas de Semana 11 verifican guardias, rechazo de destinos externos, estados
+cerrados, login hacia detalle por ID, blur, borrador tras volver al listado, 422 por
+campo, guardado y tratamiento distinto de 401/403. Los recorridos de widgets usan
+dobles de prueba, no se presentan como una grabación con el backend real. Las pruebas
+del backend y la instalación física se verifican por separado.
+
+Resultado del 2 de octubre de 2026: análisis sin problemas, 19 pruebas Flutter
+aprobadas y APK debug compilado e instalado en SM A715F sin limpiar SQLite.
+Hot restart completado en 4874 ms. La API desde el teléfono devolvió CONNECTED;
+los logs de la app mostraron GET /api/gastos 401 seguido de 200 y posteriores
+lecturas 200, confirmando la continuidad del refresh y del listado real.
+
+Evidencia manual: iniciar sesión, abrir una tarjeta del listado, volver, completar
+Nuevo gasto, regresar al listado y reabrir el formulario, guardar y observar su
+detalle. La nueva pantalla de creación reemplaza el diálogo anterior. GitHub Copilot
+asistió en la integración; las decisiones se verifican mediante análisis, pruebas
+y ejecución física, conservando las funcionalidades de las Semanas 12–14.
+
 ## Semana 9 – Entorno móvil verificado
 
 Verificación realizada el 2 de octubre de 2026 sin recrear el proyecto,

@@ -132,6 +132,7 @@ class ApiClient {
 
   AppApiException _mapFailure(http.Response response) {
     if (response.statusCode == 401) return const AuthenticationFailure();
+    if (response.statusCode == 403) return const ForbiddenFailure();
     if (response.statusCode == 422) {
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       final rawErrors = data['errors'] as Map<String, dynamic>? ?? const {};
