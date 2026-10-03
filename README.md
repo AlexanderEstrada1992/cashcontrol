@@ -4,6 +4,64 @@ CashControl es una aplicación móvil multiplataforma orientada a la gestión de
 
 ## Semana 11 – Navegación, estado y formularios
 
+## Semana 12 – Persistencia local, sesión segura y sincronización
+
+Inventario y clasificación de datos en cliente:
+
+| Clase de dato | Ejemplos | Sensibilidad | Mecanismo |
+| --- | --- | --- | --- |
+| Credenciales de sesión | access token, refresh token, userId | Alta | flutter_secure_storage cifrado del sistema |
+| Datos de negocio visibles | monto, descripción, fecha, categoría, coordenadas y estado de sincronización | Media | SQLite (`expenses`) |
+| Operaciones pendientes | payload de creación, intentos, próximo reintento, estado | Media | SQLite (`pending_operations`) |
+| Metadatos de sincronización | `last_sync_<userId>` | Baja | SQLite (`app_metadata`) |
+
+Decisiones técnicas de almacenamiento:
+
+- SQLite se mantiene como base local por soporte ACID, transacciones, consultas indexables y migraciones versionadas en Flutter.
+- `flutter_secure_storage` se usa para sesión cifrada por plataforma; no se persisten tokens en preferencias de clave/valor.
+
+Esquema local (orientado a lectura y offline-first):
+
+- Tabla `expenses` con campos de UI y control cliente (`last_synced_at`, `sync_status`, `client_operation_id`).
+- Tabla `pending_operations` para cola de salida con `attempt_count`, `next_attempt_at`, `status` y `user_id`.
+- Versión de esquema en `LocalDatabase` con `onUpgrade` para migrar sin destruir datos.
+
+Sincronización y reconciliación:
+
+- Cada operación cliente usa `client_operation_id` único y estable para reenvíos idempotentes.
+- Reintentos exponenciales en cola (1s, 2s, 4s, 8s; máximo 5 intentos) y marca `failed` al exceder límite.
+- Al recuperar conectividad, `SyncService` envía la cola y actualiza la lista local.
+- Estrategia de conflicto: idempotencia por `client_operation_id` en backend; si llega una operación ya registrada del mismo usuario, se devuelve el registro existente (se sacrifica "última escritura del cliente" en favor de consistencia de servidor por operación).
+
+Timestamps y caducidad:
+
+- Las marcas de reconciliación se toman del servidor (`updated_at` devuelto por API), no del reloj del dispositivo.
+- Se aplica caducidad de caché local de 24 horas; la UI muestra aviso visible cuando la caché está vencida y la app permanece offline.
+- La pantalla siempre carga desde base local para evitar vistas vacías en ausencia de red.
+
+Minimización y limpieza:
+
+- Solo se persisten campos necesarios para la UI y control de sincronización.
+- Al cerrar sesión se limpia almacenamiento seguro completo y datos locales del usuario (`expenses`, `pending_operations`, `app_metadata`).
+
+Datos personales y retención:
+
+- Se almacenan localmente: identificador de usuario, gastos capturados (incluyendo descripción, monto, fecha, y opcionalmente coordenadas/foto local) y cola pendiente.
+- Finalidad: continuidad offline, reintentos de sincronización y trazabilidad de estado en UI.
+- Retención local: hasta sincronización y uso activo de la sesión; limpieza total al logout del usuario.
+
+Evidencia funcional recomendada para taller:
+
+- Flujo en modo avión: abrir app con datos previos, registrar gasto offline, visualizar estado pendiente.
+- Recuperar red: observar sincronización automática y cambio de estado a sincronizado.
+- Cerrar sesión: verificar limpieza de sesión y datos locales del usuario.
+
+Uso de IA en esta semana:
+
+- Herramienta: GitHub Copilot (GPT-5.3-Codex).
+- Tareas asistidas: revisión de brechas de criterios Semana 12 y ajuste de timestamps/TTL/documentación.
+- Verificaciones realizadas: análisis de código, pruebas automatizadas y validación funcional del flujo offline/sync.
+
 Se conecta `go_router` con un `AppController` compartido basado en ChangeNotifier.
 El enrutador vive durante toda la aplicación, protege las rutas privadas y permite
 reconstruir las pantallas desde su dirección. No se pasan objetos Expense por extra.

@@ -22,11 +22,17 @@ function validateExpense(body, { create = true, userId } = {}) {
       Math.abs(body.amount * 100 - Math.round(body.amount * 100)) > 0.0001) {
     errors.amount = 'El monto debe ser positivo, con hasta dos decimales y dentro del rango permitido';
   }
-  for (const field of ['date', ...(create ? ['updated_at'] : [])]) {
+  for (const field of ['date']) {
     const value = body[field];
     const parsed = typeof value === 'string' ? new Date(value) : new Date(NaN);
     if (Number.isNaN(parsed.getTime()) || parsed.toISOString() !== value) {
       errors[field] = 'Se requiere una fecha ISO UTC válida (YYYY-MM-DDTHH:mm:ss.sssZ)';
+    }
+  }
+  if (body.updated_at !== undefined) {
+    const parsed = typeof body.updated_at === 'string' ? new Date(body.updated_at) : new Date(NaN);
+    if (Number.isNaN(parsed.getTime()) || parsed.toISOString() !== body.updated_at) {
+      errors.updated_at = 'Se requiere una fecha ISO UTC válida (YYYY-MM-DDTHH:mm:ss.sssZ)';
     }
   }
   const hasLatitude = body.latitude !== undefined && body.latitude !== null;

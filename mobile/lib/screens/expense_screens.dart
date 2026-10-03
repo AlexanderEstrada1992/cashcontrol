@@ -174,6 +174,11 @@ class ExpensesScreen extends StatelessWidget {
                     ? 'Nunca sincronizado'
                     : 'Última actualización: ${controller.lastSync!.toLocal()}',
               ),
+              if (controller.cacheStale)
+                Text(
+                  'Advertencia: los datos locales están vencidos y pueden no reflejar el estado del servidor.',
+                  style: TextStyle(color: colors.warning),
+                ),
               if (controller.syncing)
                 const LinearProgressIndicator(
                   semanticsLabel: 'Sincronizando gastos',

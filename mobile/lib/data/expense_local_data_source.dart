@@ -36,16 +36,23 @@ class ExpenseLocalDataSource {
       final existing = await transaction.query('expenses',
         columns: ['client_operation_id', 'receipt_photo_path'], where: 'user_id = ?', whereArgs: [userId]);
       final photos = {for (final row in existing) row['client_operation_id']: row['receipt_photo_path']};
+      DateTime? lastServerUpdate;
       for (final expense in expenses) {
         final row = expense.toMap();
         row['receipt_photo_path'] ??= photos[expense.clientOperationId];
         await transaction.insert('expenses', row, conflictAlgorithm: ConflictAlgorithm.replace);
+        final updatedAt = expense.updatedAt.toUtc();
+        if (lastServerUpdate == null || updatedAt.isAfter(lastServerUpdate)) {
+          lastServerUpdate = updatedAt;
+        }
       }
-      await transaction.insert(
-        'app_metadata',
-        {'key': 'last_sync_$userId', 'value': DateTime.now().toUtc().toIso8601String()},
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
+      if (lastServerUpdate != null) {
+        await transaction.insert(
+          'app_metadata',
+          {'key': 'last_sync_$userId', 'value': lastServerUpdate.toIso8601String()},
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
     });
   }
 

@@ -16,6 +16,8 @@ import 'expense_draft.dart';
 import 'operation_state.dart';
 
 class AppController extends ChangeNotifier {
+  static const Duration localCacheTtl = Duration(hours: 24);
+
   AppController({
     SecureStorageService? storage,
     ApiService? api,
@@ -69,6 +71,11 @@ class AppController extends ChangeNotifier {
   bool get authenticated => user != null && _accessToken != null;
   bool get forbidden => lastFailure is ForbiddenFailure;
   bool get syncing => expensesState is LoadingState<List<Expense>>;
+  bool get cacheStale {
+    final stamp = lastSync;
+    if (stamp == null) return true;
+    return DateTime.now().toUtc().difference(stamp.toUtc()) > localCacheTtl;
+  }
 
   void _publish() {
     if (!_disposed) notifyListeners();
@@ -210,6 +217,11 @@ class AppController extends ChangeNotifier {
     cachedExpenses = values;
     lastSync = stamp;
     expensesState = DataState(values);
+    if (!online && cacheStale && values.isNotEmpty) {
+      syncMessage = 'Los datos locales pueden estar desactualizados; sin conexión no se puede actualizar.';
+    } else if (syncMessage != null && expensesState is! ErrorState<List<Expense>>) {
+      syncMessage = null;
+    }
     _publish();
   }
 
@@ -228,8 +240,13 @@ class AppController extends ChangeNotifier {
         if (report.failed > 0) {
           syncMessage =
               'Hay gastos pendientes; los datos locales se conservaron.';
+        } else {
+          syncMessage = null;
         }
         await repository.refreshFromServer(id);
+      } else if (cacheStale && cachedExpenses.isNotEmpty) {
+        syncMessage =
+            'Mostrando caché vencida en modo sin conexión. Conéctese para sincronizar.';
       }
       if (generation == _session) await _loadLocal();
     } catch (error) {

@@ -136,7 +136,7 @@ app.get('/api/gastos', async (req, res) => {
 app.post('/api/gastos', async (req, res) => {
   let connection;
   const { client_operation_id: operationId, user_id: userId, category_id: categoryId,
-    amount, description, date, updated_at: updatedAt, latitude, longitude } = req.body || {};
+    amount, description, date, latitude, longitude } = req.body || {};
   const errors = validateExpense(req.body, { userId: req.userId });
   if (Object.keys(errors).length) {
     return res.status(422).json({ success: false, message: 'Error de validación', errors });
@@ -149,12 +149,16 @@ app.post('/api/gastos', async (req, res) => {
     });
     await ensureExpensesTable(connection);
     const existing = await connection.execute(
-      'SELECT USER_ID FROM CC_GASTOS_SYNC WHERE CLIENT_OPERATION_ID = :operationId',
+      `SELECT ${expenseColumns} FROM CC_GASTOS_SYNC WHERE CLIENT_OPERATION_ID = :operationId`,
       { operationId }, { outFormat: oracledb.OUT_FORMAT_OBJECT }
     );
     if (existing.rows.length && existing.rows[0].USER_ID !== req.userId) {
       return res.status(409).json({ success: false, message: 'Identificador de operación no disponible' });
     }
+    if (existing.rows.length) {
+      return res.status(200).json({ success: true, data: expenseFromRow(existing.rows[0]) });
+    }
+    const serverUpdatedAt = new Date();
     await connection.execute(`
       MERGE INTO CC_GASTOS_SYNC target
       USING (SELECT :operationId client_operation_id FROM dual) source
@@ -172,15 +176,24 @@ app.post('/api/gastos', async (req, res) => {
         (CLIENT_OPERATION_ID, USER_ID, CATEGORY_ID, AMOUNT, DESCRIPTION, EXPENSE_DATE, UPDATED_AT, LATITUDE, LONGITUDE)
         VALUES (:operationId, :userId, :categoryId, :amount, :description,
           :expenseDate, :updatedAt, :latitude, :longitude)
-    `, { operationId, userId: String(userId), categoryId: String(categoryId), amount,
-      description: description || '', expenseDate: new Date(date), updatedAt: new Date(updatedAt),
-      latitude: latitude ?? null, longitude: longitude ?? null }, { autoCommit: true });
+    `, {
+      operationId,
+      userId: String(userId),
+      categoryId: String(categoryId),
+      amount,
+      description: description || '',
+      expenseDate: new Date(date),
+      updatedAt: serverUpdatedAt,
+      latitude: latitude ?? null,
+      longitude: longitude ?? null,
+    }, { autoCommit: true });
     expenseCache.invalidate(req.userId);
-    const result = await connection.execute(
+    const created = await connection.execute(
       `SELECT ${expenseColumns} FROM CC_GASTOS_SYNC WHERE CLIENT_OPERATION_ID = :operationId AND USER_ID = :userId`,
-      { operationId, userId: req.userId }, { outFormat: oracledb.OUT_FORMAT_OBJECT }
+      { operationId, userId: req.userId },
+      { outFormat: oracledb.OUT_FORMAT_OBJECT },
     );
-    res.status(existing.rows.length ? 200 : 201).json({ success: true, data: expenseFromRow(result.rows[0]) });
+    res.status(201).json({ success: true, data: expenseFromRow(created.rows[0]) });
   } catch (error) {
     if (error.errorNum === 1) {
       return res.status(409).json({ success: false, message: 'Identificador de operación duplicado; consulte el registro antes de reintentar' });
